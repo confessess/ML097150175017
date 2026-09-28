@@ -1658,7 +1658,345 @@ do
 	end
 end
 
-debugLog("exact ML helper layer merged")
+ML.findNativeAutoLiftButton = function()
+	local gameGui = PlayerGui:FindFirstChild("gameGui")
+	local modernHud = gameGui and gameGui:FindFirstChild("hudNewMenu")
+	local modernTop = modernHud and modernHud:FindFirstChild("Top")
+	local modernButton = modernTop and modernTop:FindFirstChild("AutoLiftBtn")
+	if modernButton and modernButton:IsA("GuiButton") then
+		return modernButton
+	end
+	local frame = PlayerGui:FindFirstChild("autoLiftFrame", true)
+	local button = frame and frame:FindFirstChild("autoLiftButton", true)
+	if button and button:IsA("GuiButton") then
+		return button
+	end
+	return nil
+end
+
+ML.releaseNativeAutoLiftButton = function()
+	local native = ML.State.autoLiftNative
+	if native.connection then
+		pcall(function()
+			native.connection:Disconnect()
+		end)
+		native.connection = nil
+	end
+	if native.visualConnection then
+		pcall(function() native.visualConnection:Disconnect() end)
+		native.visualConnection = nil
+	end
+	for _, connection in ipairs(native.disabledConnections) do
+		pcall(function()
+			connection:Enable()
+		end)
+	end
+	table.clear(native.disabledConnections)
+	if native.fallbackMarker then
+		pcall(function()
+			native.fallbackMarker:Destroy()
+		end)
+		native.fallbackMarker = nil
+	end
+	if ML.State.autoLiftEditableImage then
+		pcall(function() ML.State.autoLiftEditableImage:Destroy() end)
+		ML.State.autoLiftEditableImage = nil
+	end
+	ML.State.autoLiftEditableLoading = false
+	native.button = nil
+end
+
+ML.State.refreshNativeAutoLiftVisual = function()
+	local button = ML.State.autoLiftNative.button
+	if not button or not button.Parent or button.Name ~= "AutoLiftBtn" then return end
+	local enabled = LP:GetAttribute("AutoLiftEnabled") == true
+	local stateLabel = button:FindFirstChild("InfoLabel")
+	if stateLabel and stateLabel:IsA("TextLabel") then
+		stateLabel.Text = enabled and "ON" or "OFF"
+		stateLabel.TextColor3 = enabled and Color3.fromRGB(85, 255, 127) or Color3.fromRGB(255, 80, 80)
+		stateLabel.TextStrokeColor3 = enabled and Color3.fromRGB(0, 85, 0) or Color3.fromRGB(85, 0, 0)
+	end
+	if button:IsA("ImageButton") then
+		button.ImageColor3 = Color3.new(1, 1, 1)
+		if not enabled then
+			button.Image = "rbxassetid://129249781616384"
+			return
+		end
+		local editable = ML.State.autoLiftEditableImage
+		local usable = editable and pcall(function() return editable.Size.X > 0 end)
+		if not usable and not ML.State.autoLiftEditableLoading then
+			ML.State.autoLiftEditableLoading = true
+			local created, result = pcall(function()
+				local image = game:GetService("AssetService"):CreateEditableImageAsync(
+					Content.fromUri("rbxassetid://129249781616384")
+				)
+				local size = image.Size
+				local pixels = image:ReadPixelsBuffer(Vector2.zero, size)
+				for index = 0, size.X * size.Y - 1 do
+					local offset = index * 4
+					local red = buffer.readu8(pixels, offset)
+					local green = buffer.readu8(pixels, offset + 1)
+					local blue = buffer.readu8(pixels, offset + 2)
+					local alpha = buffer.readu8(pixels, offset + 3)
+					if alpha > 0 and red > 45 and red > green * 1.35 and red > blue * 1.18 then
+						buffer.writeu8(pixels, offset, math.floor(red * 0.1))
+						buffer.writeu8(pixels, offset + 1, red)
+						buffer.writeu8(pixels, offset + 2, math.floor(red * 0.33))
+					end
+				end
+				image:WritePixelsBuffer(Vector2.zero, size, pixels)
+				return image
+			end)
+			ML.State.autoLiftEditableLoading = false
+			if created and result then
+				ML.State.autoLiftEditableImage = result
+				ML.State.autoLiftEditableError = nil
+				editable = result
+			else
+				ML.State.autoLiftEditableError = tostring(result)
+			end
+		end
+		if editable then
+			local applied = pcall(function()
+				button.ImageContent = Content.fromObject(editable)
+			end)
+			if applied then return end
+		end
+		button.Image = "rbxassetid://129249781616384"
+	end
+end
+
+ML.bindNativeAutoLiftButton = function()
+	local button = ML.findNativeAutoLiftButton()
+	if not button then
+		return false
+	end
+	local native = ML.State.autoLiftNative
+	if native.button == button and native.connection and native.connection.Connected then
+		return true
+	end
+	ML.releaseNativeAutoLiftButton()
+	native.button = button
+	button.Active = true
+	button.Selectable = true
+
+	local isolated = false
+	if type(getconnections) == "function" then
+		for _, signal in ipairs({
+			button.Activated,
+			button.MouseButton1Click,
+			button.MouseButton1Down,
+			button.MouseButton1Up,
+		}) do
+			local ok, connections = pcall(getconnections, signal)
+			if ok and type(connections) == "table" then
+				for _, connection in ipairs(connections) do
+					local disabled = pcall(function()
+						connection:Disable()
+					end)
+					if disabled then
+						table.insert(native.disabledConnections, connection)
+						isolated = true
+					end
+				end
+			end
+		end
+	end
+
+	local owned = LP:FindFirstChild("ownedGamepasses")
+	if owned and not owned:FindFirstChild("Auto Lift") then
+		local marker = Instance.new("BoolValue")
+		marker.Name = "Auto Lift"
+		marker.Value = true
+		marker:SetAttribute("Temp", not isolated)
+		marker.Parent = owned
+		native.fallbackMarker = marker
+	end
+
+	native.connection = button.Activated:Connect(function()
+		if not ML.State.running or not ML.State.autoLiftUnlocked then
+			return
+		end
+		LP:SetAttribute("AutoLiftEnabled", LP:GetAttribute("AutoLiftEnabled") ~= true)
+	end)
+	native.visualConnection = LP:GetAttributeChangedSignal("AutoLiftEnabled"):Connect(function()
+		task.defer(ML.State.refreshNativeAutoLiftVisual)
+	end)
+	ML.State.refreshNativeAutoLiftVisual()
+	return true
+end
+
+ML.unlockNativeAutoLift = function()
+	if ML.State.autoLiftUnlocked then
+		local bound = ML.bindNativeAutoLiftButton()
+		if bound then LP:SetAttribute("AutoLiftEnabled", true); task.defer(ML.State.refreshNativeAutoLiftVisual) end
+		return bound
+	end
+	if not ML.bindNativeAutoLiftButton() then
+		return false
+	end
+	ML.State.autoLiftUnlocked = true
+	LP:SetAttribute("AutoLiftEnabled", true)
+	task.defer(ML.State.refreshNativeAutoLiftVisual)
+	return true
+end
+
+ML.hiddenFrames = setmetatable({}, { __mode = "k" })
+ML.hideFramesConnections = {}
+ML.hiddenDurabilityFrames = setmetatable({}, { __mode = "k" })
+ML.durabilityFrameConnections = {}
+ML.trainingFrameNames = {
+	strengthframe = true,
+	durabilityframe = true,
+	agilityframe = true,
+	fuerzaframe = true,
+}
+
+ML.releaseHiddenObjects = function(objects)
+	for object, entry in pairs(objects) do
+		if entry.visibleConnection then
+			entry.visibleConnection:Disconnect()
+		end
+		if entry.ancestryConnection then
+			entry.ancestryConnection:Disconnect()
+		end
+		if object and object.Parent then
+			pcall(function()
+				object.Visible = entry.visible
+			end)
+		end
+	end
+	table.clear(objects)
+end
+
+ML.keepObjectHidden = function(objects, object, isEnabled)
+	if objects[object] ~= nil then
+		return
+	end
+	local entry = { visible = object.Visible }
+	objects[object] = entry
+	entry.visibleConnection = object:GetPropertyChangedSignal("Visible"):Connect(function()
+		if isEnabled() and object.Parent and object.Visible then
+			object.Visible = false
+		end
+	end)
+	entry.ancestryConnection = object.AncestryChanged:Connect(function(_, parent)
+		if parent == nil then
+			if entry.visibleConnection then
+				entry.visibleConnection:Disconnect()
+			end
+			if entry.ancestryConnection then
+				entry.ancestryConnection:Disconnect()
+			end
+			objects[object] = nil
+		end
+	end)
+	object.Visible = false
+end
+
+ML.hideDurabilityFrame = function(object)
+	if object
+		and object:IsA("GuiObject")
+		and object.Name == "durabilityFrame"
+		and ML.hiddenDurabilityFrames[object] == nil then
+		ML.keepObjectHidden(ML.hiddenDurabilityFrames, object, function()
+			return ML.State.running and ML.State.hideDurability
+		end)
+	end
+end
+
+ML.setHideDurability = function(enabled)
+	ML.State.hideDurability = enabled == true
+	for _, connection in ipairs(ML.durabilityFrameConnections) do
+		connection:Disconnect()
+	end
+	table.clear(ML.durabilityFrameConnections)
+
+	if ML.State.hideDurability then
+		for _, object in ipairs(ReplicatedStorage:GetChildren()) do
+			pcall(ML.hideDurabilityFrame, object)
+		end
+		for _, object in ipairs(PlayerGui:GetDescendants()) do
+			pcall(ML.hideDurabilityFrame, object)
+		end
+		ML.durabilityFrameConnections[#ML.durabilityFrameConnections + 1] = ReplicatedStorage.ChildAdded:Connect(function(object)
+			if ML.State.hideDurability then
+				task.defer(ML.hideDurabilityFrame, object)
+			end
+		end)
+		ML.durabilityFrameConnections[#ML.durabilityFrameConnections + 1] = PlayerGui.DescendantAdded:Connect(function(object)
+			if ML.State.hideDurability then
+				task.defer(ML.hideDurabilityFrame, object)
+			end
+		end)
+	else
+		ML.releaseHiddenObjects(ML.hiddenDurabilityFrames)
+	end
+end
+
+ML.hideFrame = function(object, expectedParent)
+	if ML.State.hideFrames
+		and object
+		and object.Parent == expectedParent
+		and object:IsA("GuiObject")
+		and ML.trainingFrameNames[tostring(object.Name or ""):lower()]
+		and ML.hiddenFrames[object] == nil then
+		ML.keepObjectHidden(ML.hiddenFrames, object, function()
+			return ML.State.running and ML.State.hideFrames
+		end)
+	end
+end
+
+ML.setHideFrames = function(enabled)
+	ML.State.hideFrames = enabled == true
+	local showPopups = not ML.State.hideFrames
+	local changedPreference = LP:GetAttribute("ShowPopups") ~= showPopups
+	pcall(LP.SetAttribute, LP, "ShowPopups", showPopups)
+	if changedPreference and not ML.State.shuttingDown then
+		local events = ReplicatedStorage:FindFirstChild("rEvents")
+		local remote = events and events:FindFirstChild("savePlayerSizeEvent")
+		if remote and remote:IsA("RemoteEvent") then
+			pcall(remote.FireServer, remote, "showPopupsOption")
+		end
+	end
+	for _, connection in ipairs(ML.hideFramesConnections) do
+		connection:Disconnect()
+	end
+	table.clear(ML.hideFramesConnections)
+
+	if ML.State.hideFrames then
+		local watchedRoots = {}
+		local function watchRoot(root)
+			if not root or watchedRoots[root] then
+				return
+			end
+			watchedRoots[root] = true
+			for _, object in ipairs(root:GetChildren()) do
+				pcall(ML.hideFrame, object, root)
+			end
+			ML.hideFramesConnections[#ML.hideFramesConnections + 1] = root.ChildAdded:Connect(function(object)
+				if ML.State.running and ML.State.hideFrames then
+					task.defer(ML.hideFrame, object, root)
+				end
+			end)
+		end
+
+		watchRoot(ReplicatedStorage:FindFirstChild("shared") and ReplicatedStorage.shared:FindFirstChild("assets") and ReplicatedStorage.shared.assets:FindFirstChild("ui") or nil)
+		watchRoot(PlayerGui:FindFirstChild("statEffectsGui"))
+		ML.hideFramesConnections[#ML.hideFramesConnections + 1] = PlayerGui.ChildAdded:Connect(function(object)
+			if ML.State.running and ML.State.hideFrames and object.Name == "statEffectsGui" then
+				task.defer(watchRoot, object)
+			end
+		end)
+	else
+		ML.releaseHiddenObjects(ML.hiddenFrames)
+	end
+end
+
+ML.State.hideFrames = false
+ML.State.hideDurability = false
+
+ML.bindNativeAutoLiftButton()
 
 safeUiNotify(UI, {
 	Title = "Loaded",
