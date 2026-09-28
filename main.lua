@@ -697,6 +697,311 @@ Misc:Keybind({
 	end,
 })
 
+local ML = {}
+ML.connections = {}
+ML.threads = {}
+ML.threadGenerations = {}
+ML.cleanupActions = {}
+ML.Controller = {}
+
+ML.State = Env.__FGState or {
+	running = true,
+	shuttingDown = false,
+	resume = type(Env.Young0xFG100Resume) == "table" and Env.Young0xFG100Resume or nil,
+	fastPunch = false,
+	fastPunchGeneration = 0,
+	selectedRock = nil,
+	rockGeneration = 0,
+	rockSessionStartedAt = nil,
+	rockVisualReadyAt = math.huge,
+	autoWeight = false,
+	autoHandstands = false,
+	autoLift = false,
+	autoSitups = false,
+	autoLiftUnlocked = false,
+	autoLiftNative = {
+		button = nil,
+		connection = nil,
+		visualConnection = nil,
+		disabledConnections = {},
+		fallbackMarker = nil,
+	},
+	autoEgg = false,
+	themeName = "Galaxia",
+	afk = {
+		active = false,
+		mode = "Fast Rebirth",
+		autoEgg = true,
+		startedAt = nil,
+	},
+	exerciseMovement = {
+		active = {},
+		humanoid = nil,
+		walkSpeed = nil,
+		jumpValue = nil,
+		usesJumpPower = true,
+	},
+	hideFrames = false,
+	originalShowPopups = LP:GetAttribute("ShowPopups"),
+	autoFarmMode = "Chill Rep",
+	fullTrainMode = "Chill Rep",
+	hideDurability = false,
+	fastFarmMode = nil,
+	machine = nil,
+	autoPet = false,
+	autoAura = false,
+	antiLag = false,
+	antiLagGeneration = 0,
+	antiCrash = false,
+	walkWater = false,
+	autoSpinWheel = false,
+	autoClaimChests = false,
+	mainAutoSize = false,
+	mainAutoSpeed = false,
+	mainSize = 2,
+	mainSpeed = 800,
+	infiniteJump = false,
+	removePortals = false,
+	fastSpeed = false,
+	fly = false,
+	flyLevel = 10,
+	antiKnockback = false,
+	noclip = false,
+	noclipBeachSurfaceY = nil,
+	spin = false,
+	spy = false,
+	spyTarget = nil,
+	kill = {
+		auto = false,
+		autoWinBrawl = false,
+		brawlPhase = "IDLE",
+		brawlBusy = false,
+		brawlCombat = false,
+		brawlJoined = false,
+		brawlJoinSent = false,
+		brawlChosen = nil,
+		brawlBaselineWins = nil,
+		brawlReturnCFrame = nil,
+		brawlMovement = nil,
+		karmaMode = nil,
+		protectFriends = false,
+		targetMode = false,
+		target = nil,
+		serverHop = false,
+		serverHopInterval = CONFIG.ServerHop.Interval,
+		serverHopMode = "full",
+		hopOnDeath = false,
+		avoidKillers = false,
+		claimKing = true,
+		serverCandidate = nil,
+		friendCache = {},
+		serverHistory = {},
+		serversVisited = 1,
+		hopNow = false,
+		noTargetsSince = nil,
+		lockCFrame = nil,
+		lockCharacter = nil,
+		killSessionActive = false,
+		sessionKills = 0,
+		sessionStartKills = nil,
+		sessionLastTotal = nil,
+		sessionElapsed = 0,
+		sessionStartedAt = nil,
+		friendProtectionReady = false,
+		hopRetrying = false,
+		hopInProgress = false,
+		forceHopReason = nil,
+		targetRetryAt = {},
+		combatCFrame = nil,
+		movementWalkSpeed = nil,
+		lastObservedKills = nil,
+		lastKillAt = os.clock(),
+	},
+	trade = {
+		busy = false,
+		requestGeneration = 0,
+		delivered = 0,
+		total = 0,
+	},
+	rebirth = {
+		target = nil,
+		autoTarget = false,
+		infinite = false,
+		sizeOne = false,
+		fastWeight = false,
+		autoLift = false,
+		autoLiftStartedWeight = false,
+		king = false,
+		lockPosition = false,
+		lockCFrame = nil,
+		ultimateRunning = false,
+	},
+}
+ML.State.allToggleControllers = {}
+ML.State.profileControls = {}
+ML.State.selectorControllers = {}
+ML.State.outputEntries = ML.State.resume and type(ML.State.resume.outputEntries) == "table" and ML.State.resume.outputEntries or {}
+ML.State.pushOutput = function(kind, message)
+	local entry = {
+		time = os.date("%H:%M:%S"),
+		kind = tostring(kind or "INFO"),
+		message = tostring(message or ""),
+	}
+	table.insert(ML.State.outputEntries, 1, entry)
+	while #ML.State.outputEntries > 100 do table.remove(ML.State.outputEntries) end
+	if type(ML.State.refreshOutput) == "function" then task.defer(ML.State.refreshOutput) end
+	return entry
+end
+
+ML.track = function(connection)
+	ML.connections[#ML.connections + 1] = connection
+	return connection
+end
+
+ML.addCleanup = function(callback)
+	ML.cleanupActions[#ML.cleanupActions + 1] = callback
+end
+
+ML.stopThread = function(key)
+	ML.threadGenerations[key] = (ML.threadGenerations[key] or 0) + 1
+	local thread = ML.threads[key]
+	if thread then
+		pcall(task.cancel, thread)
+		ML.threads[key] = nil
+	end
+end
+
+ML.startThread = function(key, callback)
+	ML.stopThread(key)
+	local generation = ML.threadGenerations[key]
+	local thread
+	thread = task.defer(function()
+		local ok, err = pcall(callback)
+		if not ok and ML.State.running then ML.State.pushOutput("ERROR", key .. ": " .. tostring(err):sub(1, 240)) end
+		if ML.threadGenerations[key] == generation and ML.threads[key] == thread then
+			ML.threads[key] = nil
+		end
+	end)
+	ML.threads[key] = thread
+	return ML.threads[key]
+end
+
+ML.disconnectAll = function()
+	for _, connection in ipairs(ML.connections) do
+		pcall(function()
+			connection:Disconnect()
+		end)
+	end
+	table.clear(ML.connections)
+	for key in pairs(ML.threads) do
+		ML.stopThread(key)
+	end
+end
+
+ML.getCharacter = function()
+	return LP.Character
+end
+
+ML.getHumanoid = function()
+	local character = ML.getCharacter()
+	return character and character:FindFirstChildWhichIsA("Humanoid")
+end
+
+ML.getRoot = function()
+	local character = ML.getCharacter()
+	return character and character:FindFirstChild("HumanoidRootPart")
+end
+
+ML.findValue = function(root, names)
+	if not root then
+		return nil
+	end
+	for _, name in ipairs(names) do
+		local wanted = name:lower():gsub("%s+", "")
+		for _, child in ipairs(root:GetChildren()) do
+			local key = child.Name:lower():gsub("%s+", "")
+			if key == wanted and child:IsA("ValueBase") then
+				return child
+			end
+		end
+	end
+	return nil
+end
+
+ML.getPlayerStat = function(player, names)
+	local leaderstats = player and player:FindFirstChild("leaderstats")
+	return ML.findValue(leaderstats, names) or ML.findValue(player, names)
+end
+
+ML.State.getFunctionalStatValue = function(valueObject)
+	if not valueObject then return nil end
+	local records = ML.State.visualStatRecords
+	local record = records and records[valueObject]
+	if record and record.realValue ~= nil then return record.realValue end
+	return valueObject.Value
+end
+
+ML.State.protectedPetNameFallback = {
+	["swift samurai"] = true,
+	["tribal overlord"] = true,
+}
+
+ML.State.hasEnabledPetMarker = function(pet, name)
+	local marker = pet and pet:FindFirstChild(name)
+	if not marker then return false end
+	if marker:IsA("BoolValue") then return marker.Value == true end
+	return true
+end
+
+ML.State.isProtectedPetAsset = function(pet)
+	if not pet or not pet.Parent or not pet:IsA("StringValue") then return true end
+	if ML.State.protectedPetNameFallback[pet.Name:lower()] then return true end
+	local categoryName = pet.Parent and pet.Parent.Name:lower() or ""
+	if categoryName:find("robux", 1, true) or categoryName:find("pack", 1, true) then return true end
+	local shared = ReplicatedStorage:FindFirstChild("shared")
+	local runtime = shared and shared:FindFirstChild("runtime")
+	local packCatalog = runtime and runtime:FindFirstChild("packPetPerks")
+	if packCatalog and packCatalog:FindFirstChild(pet.Name) then return true end
+	for _, marker in ipairs({ "packPet", "unsellable", "untradeable", "locked", "protected" }) do
+		if ML.State.hasEnabledPetMarker(pet, marker) then return true end
+	end
+	for _, attribute in ipairs({ "PackPet", "RobuxPet", "Unsellable", "Untradeable", "Locked", "Protected" }) do
+		if pet:GetAttribute(attribute) == true then return true end
+	end
+	return false
+end
+
+ML.formatExact = function(value)
+	local number = tonumber(value) or 0
+	local negative = number < 0
+	local digits = string.format("%.0f", math.abs(number))
+	local grouped = digits:reverse():gsub("(%d%d%d)", "%1."):reverse():gsub("^%.", "")
+	return (negative and "-" or "") .. grouped
+end
+
+ML.State.antiAfkPulses = 0
+ML.State.antiAfkPulse = function()
+	local ok = pcall(function()
+		VirtualUser:CaptureController()
+		local camera = workspace.CurrentCamera
+		local cameraCFrame = camera and camera.CFrame or CFrame.new()
+		VirtualUser:Button2Down(Vector2.new(0, 0), cameraCFrame)
+		task.wait(0.05)
+		VirtualUser:Button2Up(Vector2.new(0, 0), cameraCFrame)
+	end)
+	if ok then
+		ML.State.antiAfkPulses = ML.State.antiAfkPulses + 1
+		ML.State.lastAntiAfkPulse = os.clock()
+		ML.State.pushOutput("SYSTEM", "Anti-AFK responded correctly")
+	end
+	return ok
+end
+ML.State.antiAfkConnection = ML.track(LP.Idled:Connect(ML.State.antiAfkPulse))
+
+Env.__FGState = ML.State
+
+debugLog("exact ML helper layer merged")
+
 safeUiNotify(UI, {
 	Title = "Loaded",
 	Content = "Stage 2 movement features active.",
