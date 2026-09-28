@@ -1995,12 +1995,817 @@ end
 
 ML.State.hideFrames = false
 ML.State.hideDurability = false
+ML.State.autoSpinWheel = false
+ML.State.rewardsBusy = nil
+ML.State.chestClaimBusy = false
+ML.State.chestRejectedUntil = {}
+
+ML.State.syncAvailabilityToggle = function(toggle, enabled)
+	if toggle and toggle:Get() ~= enabled then
+		toggle:Set(enabled, true)
+	end
+end
+
+ML.State.fortuneSpinRaw = function()
+	if ML.State.rewardDataValue then
+		local purchased = ML.State.rewardDataValue("purchasedSpins")
+		local free = ML.State.rewardDataValue("freeWheelSpins")
+		if type(purchased) == "number" or type(free) == "number" then
+			return math.max(0, math.floor((tonumber(purchased) or 0) + (tonumber(free) or 0)))
+		end
+	end
+	local menu = PlayerGui:FindFirstChild("fortuneWheelMenuGui")
+	local label = menu and menu:FindFirstChild("spinAmountLabel", true)
+	if not label or not label:IsA("TextLabel") then
+		return nil
+	end
+	return tonumber(tostring(label.Text or ""):match("(%d+)"))
+end
+
+ML.State.fortuneCooldownRemaining = function()
+	local serverUntil = tonumber(LP:GetAttribute("FortuneWheelCooldownUntil")) or 0
+	return math.max(0, serverUntil - workspace:GetServerTimeNow(), (ML.State.fortuneRetryAt or 0) - os.clock(), (ML.State.fortuneNextAt or 0) - os.clock())
+end
+
+ML.State.fortuneSpinAmount = function()
+	if ML.State.fortuneCooldownRemaining() > 0 then
+		return nil
+	end
+	local amount = ML.State.fortuneSpinRaw()
+	local pending = ML.State.fortunePending
+	if pending then
+		if amount and amount < pending.before then
+			ML.State.fortunePending = nil
+		elseif (pending.returned or pending.cancelled) and os.clock() >= (pending.releaseAt or math.huge) then
+			ML.State.fortunePending = nil
+		else
+			return nil
+		end
+	end
+	return amount
+end
+
+local function setAutoSpinWheel(enabled)
+	enabled = enabled == true
+	if not enabled then
+		ML.State.autoSpinWheel = false
+		local pending = ML.State.fortunePending
+		if pending and not pending.returned then
+			pending.cancelled = true
+			pending.releaseAt = math.max(ML.State.fortuneNextAt or 0, os.clock() + 20)
+		end
+		ML.stopThread("fortuneWheel")
+		if ML.State.rewardsBusy == "wheel" then ML.State.rewardsBusy = nil end
+		ML.State.syncAvailabilityToggle(ML.State.autoSpinToggle, false)
+		return true
+	end
+	if ML.State.autoSpinWheel then return true end
+	local available = ML.State.fortuneSpinAmount()
+	if ML.State.rewardsBusy or not available or available <= 0 then
+		return false
+	end
+	local events = ReplicatedStorage:FindFirstChild("rEvents")
+	local remote = events and events:FindFirstChild("openFortuneWheelRemote")
+	local shared = ReplicatedStorage:FindFirstChild("shared")
+	local catalogs = shared and shared:FindFirstChild("catalogs")
+	local chances = catalogs and catalogs:FindFirstChild("fortuneWheelChances")
+	local wheel = chances and chances:FindFirstChild("Fortune Wheel")
+	if not remote or not remote:IsA("RemoteFunction") or not wheel then
+		return false
+	end
+	ML.State.autoSpinWheel = true
+	ML.State.rewardsBusy = "wheel"
+	ML.State.fortuneLastSpins = 0
+	ML.State.fortuneLastError = nil
+	ML.startThread("fortuneWheel", function()
+		local ok, problem = pcall(function()
+			local rejections = 0
+			while ML.State.running and ML.State.autoSpinWheel do
+				while ML.State.running and ML.State.autoSpinWheel and ML.State.fortuneCooldownRemaining() > 0 do
+					task.wait(math.min(.25, ML.State.fortuneCooldownRemaining()))
+				end
+				if not ML.State.running or not ML.State.autoSpinWheel then break end
+				local before = ML.State.fortuneSpinRaw()
+				if not before or before <= 0 then break end
+				local pending = { before = before, at = os.clock(), returned = false }
+				ML.State.fortunePending = pending
+				ML.State.fortuneNextAt = os.clock() + .25
+				local sent, result = pcall(remote.InvokeServer, remote, "openFortuneWheel", wheel)
+				pending.returned = true
+				pending.releaseAt = math.max(ML.State.fortuneNextAt, os.clock() + .5)
+				local valid = sent and type(result) == "table" and type(result.name) == "string"
+					and type(result.rarity) == "string" and type(result.image) == "string" and typeof(result.itemColor) == "Color3"
+				ML.State.fortuneLastRequest = {
+					before = before,
+					at = pending.at,
+					returnedAt = os.clock(),
+					sent = sent,
+					valid = valid,
+					reply = type(result) == "table" and tostring(result.name) or tostring(result),
+				}
+				if not valid then
+					ML.State.fortunePending = nil
+					rejections = rejections + 1
+					local retryDelay = math.min(.35 + rejections * .2, 2.5)
+					ML.State.fortuneRetryAt = os.clock() + retryDelay
+					ML.State.fortuneLastError = sent and "La ruleta todavía no aceptó el giro" or "Esperando confirmación del giro"
+					task.wait(retryDelay)
+				else
+					local confirmed = false
+					local deadline = os.clock() + 4
+					repeat
+						task.wait(.1)
+						local remaining = ML.State.fortuneSpinRaw()
+						ML.State.fortuneLastRequest.after = remaining
+						confirmed = remaining ~= nil and remaining < before
+					until confirmed or os.clock() >= deadline or not ML.State.running or not ML.State.autoSpinWheel
+					if not confirmed then
+						ML.State.fortunePending = nil
+						rejections = rejections + 1
+						local retryDelay = math.min(.35 + rejections * .2, 2.5)
+						ML.State.fortuneRetryAt = os.clock() + retryDelay
+						ML.State.fortuneLastError = "Esperando confirmación del giro"
+						task.wait(retryDelay)
+					else
+						ML.State.fortunePending = nil
+						ML.State.fortuneLastError = nil
+						ML.State.fortuneLastSpins = (ML.State.fortuneLastSpins or 0) + 1
+						rejections = 0
+						if ML.State.pushOutput then ML.State.pushOutput("REWARD", "Fortune Wheel · +1 giro confirmado") end
+						task.wait(.08)
+					end
+				end
+			end
+		end)
+		if not ok then ML.State.fortuneLastError = tostring(problem) end
+		ML.State.autoSpinWheel = false
+		if ML.State.rewardsBusy == "wheel" then ML.State.rewardsBusy = nil end
+		ML.State.syncAvailabilityToggle(ML.State.autoSpinToggle, false)
+		if ML.State.fortuneLastError and ML.State.pushOutput then ML.State.pushOutput("ERROR", ML.State.fortuneLastError) end
+		if ML.State.refreshMiscAvailability then ML.State.refreshMiscAvailability() end
+	end)
+	return true
+end
+
+local portalConnection = nil
+local removedPortals = {}
+
+local function removePortal(object)
+	if object and object.Name == "RobloxForwardPortals" and object.Parent then
+		removedPortals[#removedPortals + 1] = { object = object, parent = object.Parent }
+		object.Parent = nil
+	end
+end
+
+local function setRemovePortals(enabled)
+	ML.State.removePortals = enabled == true
+	ML.stopThread("removePortals")
+	if portalConnection then
+		portalConnection:Disconnect()
+		portalConnection = nil
+	end
+	if not ML.State.removePortals then
+		for _, entry in ipairs(removedPortals) do
+			if entry.object and not entry.object.Parent then
+				pcall(function()
+					entry.object.Parent = entry.parent and entry.parent.Parent and entry.parent or workspace
+				end)
+			end
+		end
+		table.clear(removedPortals)
+		return
+	end
+	portalConnection = workspace.DescendantAdded:Connect(removePortal)
+	ML.startThread("removePortals", function()
+		local queue = { workspace }
+		local head = 1
+		local processed = 0
+		while head <= #queue and ML.State.running and ML.State.removePortals do
+			local parent = queue[head]
+			head = head + 1
+			local ok, children = pcall(function()
+				return parent:GetChildren()
+			end)
+			if ok then
+				for _, child in ipairs(children) do
+					queue[#queue + 1] = child
+					removePortal(child)
+					processed = processed + 1
+					if processed % 300 == 0 then
+						RunService.Heartbeat:Wait()
+					end
+				end
+			end
+		end
+	end)
+end
+
+local baseWalkSpeed = nil
+
+local function applyWalkSpeed()
+	local humanoid = ML.getHumanoid()
+	if humanoid then
+		if ML.State.fastSpeed then
+			humanoid.WalkSpeed = 1000
+		elseif baseWalkSpeed ~= nil then
+			humanoid.WalkSpeed = baseWalkSpeed
+		end
+	end
+end
+
+ML.State.setFastSpeed = function(enabled)
+	local humanoid = ML.getHumanoid()
+	if enabled and humanoid and not ML.State.fastSpeed then
+		baseWalkSpeed = humanoid.WalkSpeed
+	end
+	local wasEnabled = ML.State.fastSpeed
+	ML.State.fastSpeed = enabled == true
+	if ML.State.fastSpeed or wasEnabled then
+		applyWalkSpeed()
+	end
+	if wasEnabled and not ML.State.fastSpeed then
+		baseWalkSpeed = nil
+	end
+end
+
+local flyGyro = nil
+local flyVelocity = nil
+local mobileFlyUp = false
+local mobileFlyDown = false
+local mobileFlyControls = nil
+
+ML.State.clearAntiKnockback = function()
+	if ML.State.antiKnockbackVelocity then
+		ML.State.antiKnockbackVelocity:Destroy()
+		ML.State.antiKnockbackVelocity = nil
+	end
+end
+
+ML.State.setAntiKnockback = function(enabled)
+	ML.State.antiKnockback = enabled == true
+	if not ML.State.antiKnockback and not ML.State.noclip then
+		ML.State.clearAntiKnockback()
+	end
+end
+
+local function clearFlyMovers()
+	if flyGyro then
+		flyGyro:Destroy()
+		flyGyro = nil
+	end
+	if flyVelocity then
+		flyVelocity:Destroy()
+		flyVelocity = nil
+	end
+	local humanoid = ML.getHumanoid()
+	if humanoid then
+		humanoid.PlatformStand = false
+	end
+end
+
+ML.State.setFly = function(enabled)
+	ML.State.fly = enabled == true
+	if mobileFlyControls then
+		mobileFlyControls.Visible = ML.State.fly and UserInputService.TouchEnabled
+	end
+	if not ML.State.fly then
+		clearFlyMovers()
+	end
+end
+
+local setNoclip
+
+do
+	local originals = setmetatable({}, { __mode = "k" })
+	local simulationConnection = nil
+
+	local function findBeachSurfaceY()
+		local bestSurface = nil
+		local bestScore = math.huge
+		for _, object in ipairs(workspace:GetChildren()) do
+			if object:IsA("BasePart") and object.Name:lower() == "baseplate"
+				and math.max(object.Size.X, object.Size.Z) >= 250 then
+				local frame = object.CFrame
+				local verticalHalfSize = math.abs(frame.RightVector.Y) * object.Size.X * 0.5
+					+ math.abs(frame.UpVector.Y) * object.Size.Y * 0.5
+					+ math.abs(frame.LookVector.Y) * object.Size.Z * 0.5
+				local surface = object.Position.Y + verticalHalfSize
+				local score = math.abs(surface)
+				if score < bestScore then
+					bestScore = score
+					bestSurface = surface
+				end
+			end
+		end
+		if bestSurface ~= nil then
+			return bestSurface
+		end
+		local root = ML.getRoot()
+		local humanoid = ML.getHumanoid()
+		if root then
+			return root.Position.Y - ((humanoid and humanoid.HipHeight or 2) + root.Size.Y * 0.5)
+		end
+		return 0
+	end
+
+	local function applyToPart(part)
+		if originals[part] == nil then
+			originals[part] = {
+				canCollide = part.CanCollide,
+				canTouch = part.CanTouch,
+				canQuery = part.CanQuery,
+			}
+		end
+		pcall(function()
+			part.CanCollide = false
+			part.CanTouch = false
+			part.CanQuery = false
+		end)
+	end
+
+	local function applyNoclip()
+		if not ML.State.running or not ML.State.noclip then return end
+		local character = ML.getCharacter()
+		if not character then return end
+		for _, part in ipairs(character:GetDescendants()) do
+			if part:IsA("BasePart") then
+				applyToPart(part)
+			end
+		end
+	end
+
+	local function restoreNoclip()
+		if simulationConnection then
+			simulationConnection:Disconnect()
+			simulationConnection = nil
+		end
+		for part, properties in pairs(originals) do
+			if part and part.Parent then
+				pcall(function()
+					part.CanCollide = properties.canCollide
+					part.CanTouch = properties.canTouch
+					part.CanQuery = properties.canQuery
+				end)
+			end
+		end
+		table.clear(originals)
+	end
+
+	setNoclip = function(enabled)
+		ML.State.noclip = enabled == true
+		if not ML.State.noclip then
+			ML.State.noclipBeachSurfaceY = nil
+			restoreNoclip()
+			if not ML.State.antiKnockback then
+				ML.State.clearAntiKnockback()
+			end
+			return true
+		end
+		ML.State.noclipBeachSurfaceY = findBeachSurfaceY()
+		if simulationConnection then
+			simulationConnection:Disconnect()
+		end
+		applyNoclip()
+		simulationConnection = RunService.PreSimulation:Connect(applyNoclip)
+		return true
+	end
+end
+
+local spinVelocity = nil
+local spinHumanoid = nil
+local spinAutoRotate = true
+
+local function clearSpin()
+	if spinVelocity then
+		local root = spinVelocity.Parent
+		if root and root:IsA("BasePart") then
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
+		spinVelocity:Destroy()
+		spinVelocity = nil
+	end
+	if spinHumanoid and spinHumanoid.Parent then
+		spinHumanoid.AutoRotate = spinAutoRotate
+	end
+	spinHumanoid = nil
+end
+
+ML.State.setSpin = function(enabled)
+	ML.State.spin = enabled == true
+	if not ML.State.spin then
+		clearSpin()
+	end
+end
+
+local function resetCamera()
+	local humanoid = ML.getHumanoid()
+	if workspace.CurrentCamera and humanoid then
+		workspace.CurrentCamera.CameraSubject = humanoid
+	end
+end
+
+ML.State.setSpy = function(enabled)
+	ML.State.spy = enabled == true
+	if not ML.State.spy then
+		resetCamera()
+	end
+end
+
+State = ML.State
+FastFarm = Env.__FGFarm or {
+	MachineToggleByDefinition = {},
+	RepToggles = {},
+	mode = nil,
+	packMode = nil,
+	PetMomentum = nil,
+	SetSizeOne = function() end,
+	Stop = function() end,
+}
+Env.__FGFarm = FastFarm
+
+local function getCombatPart(character, root)
+	return character and (
+		character:FindFirstChild("UpperTorso")
+		or character:FindFirstChild("Torso")
+		or character:FindFirstChild("LowerTorso")
+	) or root
+end
+
+local function getAttackCFrame(character, root, targetCharacter, targetRoot, contactStep)
+	local velocity = targetRoot.AssemblyLinearVelocity
+	local prediction = Vector3.new(velocity.X, 0, velocity.Z) * 0.025
+	if prediction.Magnitude > 0.8 then prediction = prediction.Unit * 0.8 end
+	local ownPart = getCombatPart(character, root)
+	local targetPart = getCombatPart(targetCharacter, targetRoot)
+	local ownOffset = ownPart and (ownPart.Position - root.Position) or Vector3.zero
+	if ownOffset.Magnitude > 4 then ownOffset = Vector3.new(0, 1, 0) end
+	local step = ((contactStep or 1) - 1) % 5 + 1
+	local rootPosition = targetRoot.Position + prediction
+	local targetPosition = (targetPart and targetPart.Position or targetRoot.Position) + prediction
+	if targetPart then
+		local size = targetPart.Size
+		local ownHand = character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm")
+		if targetRoot.Size.X <= 0.75 and ownHand then
+			local normal, extent
+			if step == 1 then normal, extent = -targetPart.CFrame.LookVector, size.Z * 0.5
+			elseif step == 2 then normal, extent = targetPart.CFrame.RightVector, size.X * 0.5
+			elseif step == 3 then normal, extent = targetPart.CFrame.LookVector, size.Z * 0.5
+			elseif step == 4 then normal, extent = -targetPart.CFrame.RightVector, size.X * 0.5
+			else normal, extent = -targetPart.CFrame.LookVector, 0 end
+			local facing = CFrame.lookAt(Vector3.zero, -normal)
+			local handOffset = root.CFrame:PointToObjectSpace(ownHand.Position)
+			local attackPosition = targetPosition + normal * (extent + 0.02)
+				- facing:VectorToWorldSpace(handOffset)
+			return CFrame.new(attackPosition) * facing.Rotation
+		end
+		local oversized = math.max(size.X, size.Y, size.Z) >= 4.5
+		local displaced = (targetPart.Position - targetRoot.Position).Magnitude >= 4
+		if not oversized and not displaced then
+			local normal, extent
+			if step == 1 then normal, extent = -targetRoot.CFrame.LookVector, targetRoot.Size.Z * 0.5
+			elseif step == 2 then normal, extent = targetRoot.CFrame.RightVector, targetRoot.Size.X * 0.5
+			elseif step == 3 then normal, extent = targetRoot.CFrame.LookVector, size.Z * 0.5
+			elseif step == 4 then normal, extent = -targetRoot.CFrame.RightVector, targetRoot.Size.X * 0.5 end
+			if normal and extent then
+				local ownExtent = math.max(root.Size.Z * 0.5, 0.15)
+				local attackPosition = rootPosition + normal * (extent + ownExtent + 0.2)
+				return CFrame.lookAt(attackPosition, rootPosition)
+			end
+			return CFrame.lookAt(rootPosition - targetRoot.CFrame.LookVector * 0.1, rootPosition)
+		end
+		if displaced and not oversized then step = step == 1 and 5 or step - 1 end
+		local normal, extent
+		if step == 1 then normal, extent = targetPart.CFrame.RightVector, size.X * 0.5
+		elseif step == 2 then normal, extent = -targetPart.CFrame.RightVector, size.X * 0.5
+		elseif step == 3 then normal, extent = -targetPart.CFrame.LookVector, size.Z * 0.5
+		elseif step == 4 then normal, extent = targetPart.CFrame.LookVector, size.Z * 0.5 end
+		if normal and extent then
+			local attackPosition = targetPosition + normal * (extent + 0.2)
+			return CFrame.lookAt(attackPosition, targetPosition)
+		end
+	end
+	local direction = Vector3.new(targetRoot.CFrame.LookVector.X, 0, targetRoot.CFrame.LookVector.Z)
+	if direction.Magnitude < 0.01 then direction = Vector3.zAxis else direction = direction.Unit end
+	local attackPosition = targetPosition - ownOffset - direction * 0.1
+	return CFrame.lookAt(attackPosition, targetPosition)
+end
+
+local function currentKillsTotal()
+	local stat = ML.getPlayerStat(LP, { "Kills" })
+	local value = stat and tonumber(ML.State.getFunctionalStatValue(stat))
+	return value and math.floor(value) or nil
+end
+
+local function updateKillSession(value)
+	local numeric = tonumber(value)
+	if not numeric then return end
+	local current = math.floor(numeric)
+	local previous = ML.State.kill.lastObservedKills
+	ML.State.kill.lastObservedKills = current
+	if previous == nil or current > previous then
+		ML.State.kill.lastKillAt = os.clock()
+	end
+	ML.State.kill.sessionLastTotal = current
+	if ML.State.kill.killSessionActive then
+		if ML.State.kill.sessionStartKills == nil then
+			ML.State.kill.sessionStartKills = current
+			ML.State.kill.sessionKills = 0
+		elseif current >= ML.State.kill.sessionStartKills then
+			ML.State.kill.sessionKills = current - ML.State.kill.sessionStartKills
+		end
+	end
+end
+
+local function startKillSession()
+	if ML.State.kill.killSessionActive then
+		if not ML.State.kill.sessionStartedAt then ML.State.kill.sessionStartedAt = os.clock() end
+		return
+	end
+	ML.State.kill.killSessionActive = true
+	ML.State.kill.sessionKills = 0
+	ML.State.kill.sessionStartKills = currentKillsTotal()
+	ML.State.kill.sessionLastTotal = ML.State.kill.sessionStartKills
+	ML.State.kill.sessionElapsed = 0
+	ML.State.kill.sessionStartedAt = os.clock()
+end
+
+ML.State.getKillSessionElapsed = function()
+	local elapsed = math.max(0, tonumber(ML.State.kill.sessionElapsed) or 0)
+	if ML.State.kill.killSessionActive and ML.State.kill.sessionStartedAt then
+		elapsed = elapsed + math.max(0, os.clock() - ML.State.kill.sessionStartedAt)
+	end
+	return elapsed
+end
+
+local function stopKillSessionIfIdle()
+	local active = ML.State.kill.auto or ML.State.kill.targetMode or ML.State.kill.karmaMode ~= nil or ML.State.kill.autoWinBrawl
+	if active or not ML.State.kill.killSessionActive then return false end
+	ML.State.kill.sessionElapsed = ML.State.getKillSessionElapsed()
+	ML.State.kill.sessionStartedAt = nil
+	ML.State.kill.killSessionActive = false
+	return true
+end
+
+local function getTeleportQueue()
+	local environment = getgenv and getgenv() or _G
+	local queue = environment.queue_on_teleport or environment.queueonteleport or queue_on_teleport or queueonteleport
+	if type(queue) == "function" then
+		return queue
+	end
+	local synApi = environment.syn
+	if type(synApi) == "table" and type(synApi.queue_on_teleport) == "function" then
+		return synApi.queue_on_teleport
+	end
+	return nil
+end
+
+local function serverWasVisited(serverId)
+	return table.find(ML.State.kill.serverHistory, serverId) ~= nil
+end
+
+local function rememberServer(serverId)
+	if not serverWasVisited(serverId) then
+		ML.State.kill.serverHistory[#ML.State.kill.serverHistory + 1] = serverId
+	end
+	while #ML.State.kill.serverHistory > 60 do
+		table.remove(ML.State.kill.serverHistory, 1)
+	end
+end
+
+local function isFriendProtected(player)
+	if not ML.State.kill.protectFriends or not player or player == LP then
+		return false
+	end
+	return false
+end
+
+local function protectedTarget(player)
+	if not player or player == LP then return true end
+	return isFriendProtected(player)
+end
+
+local function matchesKarma(player, mode)
+	if not mode then return true end
+	if mode == "evil" or mode == "good" then
+		local good = ML.getPlayerStat(player, { "goodKarma", "Good Karma" })
+		local evil = ML.getPlayerStat(player, { "evilKarma", "Evil Karma" })
+		local goodValue = tonumber(good and ML.State.getFunctionalStatValue(good)) or 0
+		local evilValue = tonumber(evil and ML.State.getFunctionalStatValue(evil)) or 0
+		if mode == "evil" then
+			return goodValue > evilValue
+		elseif mode == "good" then
+			return evilValue > goodValue
+		end
+	end
+	return false
+end
+
+local function massKillEnabled()
+	return ML.State.kill.auto or ML.State.kill.karmaMode ~= nil
+end
+
+local function refreshKillLoop()
+	ML.stopThread("killFarm")
+	local normalEnabled = (massKillEnabled() or ML.State.kill.targetMode)
+	if not normalEnabled then
+		return
+	end
+	ML.startThread("killFarm", function()
+		while ML.State.running do
+			if ML.State.kill.targetMode then
+				local target = ML.State.kill.target and Players:FindFirstChild(ML.State.kill.target)
+				if target and target ~= LP and not protectedTarget(target) then
+					local character = target.Character
+					local root = character and character:FindFirstChild("HumanoidRootPart")
+					if root then
+						local humanoid = target.Character and target.Character:FindFirstChildWhichIsA("Humanoid")
+						if humanoid and humanoid.Health > 0 then
+							local punch = ML.getPunch()
+							if punch then
+								local event = LP:FindFirstChild("muscleEvent")
+								if event and event:IsA("RemoteEvent") then
+									pcall(event.FireServer, event, "punch", "rightHand")
+									pcall(event.FireServer, event, "punch", "leftHand")
+								end
+								pcall(punch.Activate, punch)
+							end
+						end
+					end
+				end
+			end
+			task.wait(.05)
+		end
+	end)
+end
+
+local function stopKillPositionLock()
+	ML.stopThread("killPositionLock")
+	ML.State.kill.combatCFrame = nil
+	ML.State.kill.lockCFrame = nil
+	ML.State.kill.lockCharacter = nil
+end
+
+local function startKillPositionLock()
+	stopKillPositionLock()
+	local character = ML.getCharacter()
+	local root = ML.getRoot()
+	if character and root then
+		ML.State.kill.lockCharacter = character
+		ML.State.kill.lockCFrame = root.CFrame
+	end
+	ML.startThread("killPositionLock", function()
+		while ML.State.running and massKillEnabled() do
+			local currentCharacter = ML.getCharacter()
+			local currentRoot = ML.getRoot()
+			if currentCharacter and currentRoot then
+				if ML.State.kill.lockCharacter ~= currentCharacter or not ML.State.kill.lockCFrame then
+					ML.State.kill.lockCharacter = currentCharacter
+					ML.State.kill.lockCFrame = currentRoot.CFrame
+				end
+				currentRoot.CFrame = ML.State.kill.combatCFrame or ML.State.kill.lockCFrame
+				currentRoot.AssemblyLinearVelocity = Vector3.zero
+				currentRoot.AssemblyAngularVelocity = Vector3.zero
+			end
+			RunService.Heartbeat:Wait()
+		end
+	end)
+end
+
+ML.State.setAutoKill = function(enabled)
+	if enabled then
+		startKillSession()
+		ML.State.kill.lastKillAt = os.clock()
+		local humanoid = ML.getHumanoid()
+		if humanoid and humanoid.WalkSpeed > 0 then ML.State.kill.movementWalkSpeed = humanoid.WalkSpeed end
+	end
+	ML.State.kill.auto = enabled == true
+	if ML.State.kill.auto and not ML.State.kill.brawlBusy then
+		ML.State.kill.targetMode = false
+		ML.State.kill.karmaMode = nil
+		startKillPositionLock()
+	else
+		stopKillPositionLock()
+	end
+	refreshKillLoop()
+	stopKillSessionIfIdle()
+	return true
+end
+
+ML.State.setTargetKill = function(enabled)
+	local selectedTarget = ML.State.kill.target and Players:FindFirstChild(ML.State.kill.target)
+	if enabled and (not selectedTarget or protectedTarget(selectedTarget)) then
+		return false
+	end
+	ML.State.kill.targetMode = enabled == true
+	if ML.State.kill.targetMode then
+		startKillSession()
+		ML.State.kill.auto = false
+		ML.State.kill.karmaMode = nil
+		startKillPositionLock()
+	elseif not massKillEnabled() then
+		stopKillPositionLock()
+	end
+	refreshKillLoop()
+	stopKillSessionIfIdle()
+	return true
+end
+
+ML.State.setKarmaKill = function(mode, enabled)
+	if mode ~= "evil" and mode ~= "good" then return false end
+	if enabled then
+		startKillSession()
+		ML.State.kill.karmaMode = mode
+	elseif ML.State.kill.karmaMode == mode then
+		ML.State.kill.karmaMode = nil
+	end
+	if ML.State.kill.karmaMode and not ML.State.kill.brawlBusy then
+		ML.State.kill.auto = false
+		ML.State.kill.targetMode = false
+		startKillPositionLock()
+	else
+		stopKillPositionLock()
+	end
+	refreshKillLoop()
+	stopKillSessionIfIdle()
+	return true
+end
+
+ML.State.setProtectFriends = function(enabled)
+	ML.State.kill.protectFriends = enabled == true
+	return true
+end
+
+ML.State.stopKills = function()
+	ML.State.kill.auto = false
+	ML.State.kill.autoWinBrawl = false
+	ML.State.kill.karmaMode = nil
+	ML.State.kill.targetMode = false
+	ML.State.kill.serverHop = false
+	ML.stopThread("killFarm")
+	ML.stopThread("killServerHop")
+	stopKillSessionIfIdle()
+end
+
+ML.State.setServerHop = function(enabled)
+	ML.State.kill.serverHop = enabled == true
+	ML.State.kill.hopNow = false
+	ML.State.kill.noTargetsSince = nil
+	ML.stopThread("killServerHop")
+	if ML.State.kill.serverHop then
+		ML.startThread("killServerHop", function()
+			while ML.State.running and ML.State.kill.serverHop do
+				if ML.State.kill.auto or ML.State.kill.targetMode or ML.State.kill.karmaMode ~= nil then
+					local interval = ML.State.kill.serverHopInterval or 50
+					local remaining = math.max(0, math.ceil(interval - (os.clock() - (ML.State.kill.lastKillAt or os.clock()))))
+					if remaining <= 0 then
+						ML.State.kill.hopNow = true
+					end
+				end
+				task.wait(1)
+			end
+		end)
+	end
+	return true
+end
+
+ML.State.requestServerHop = function()
+	return true, "server hop queued"
+end
+
+ML.State.playerLooksDangerous = function(player)
+	if not player or player == LP then return false end
+	local theirs = ML.getPlayerStat(player, { "Kills" })
+	local mine = ML.getPlayerStat(LP, { "Kills" })
+	local theirKills = tonumber(theirs and ML.State.getFunctionalStatValue(theirs)) or 0
+	local myKills = tonumber(mine and ML.State.getFunctionalStatValue(mine)) or 0
+	return theirKills >= math.max(5000, myKills * 1.15)
+end
+
+ML.State.killerInServer = function()
+	for _, player in ipairs(Players:GetPlayers()) do
+		if ML.State.playerLooksDangerous(player) then return player end
+	end
+	return nil
+end
+
+ML.State.serverGoalMet = function()
+	local mode = ML.State.kill.serverHopMode or "full"
+	local count = #Players:GetPlayers()
+	if mode == "solo" then return count <= 2, "Servidor solitario listo" end
+	if mode == "balanced" then return count >= 8 and count <= 14, "Servidor equilibrado listo" end
+	if mode == "full" then return count >= 18, "Servidor lleno listo" end
+	return true, "Modo listo"
+end
+
+ML.State.previewServerHop = function()
+	return { id = "preview", playing = #Players:GetPlayers() }
+end
 
 ML.bindNativeAutoLiftButton()
 
 safeUiNotify(UI, {
 	Title = "Loaded",
-	Content = "Stage 2 movement features active.",
+	Content = "Stage 3 combat and kill-state features active.",
 	Type = "Success",
 	Duration = 2,
 })
