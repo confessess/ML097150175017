@@ -206,6 +206,248 @@ local STATE = {
 
 debugLog("state initialized")
 
+debugLog("merging original boot config from attached script")
+
+local Shared = ReplicatedStorage:FindFirstChild("shared")
+local UltimateAttributes = {}
+local GameUltimatesFolder
+
+do
+	local configFolder = Shared and Shared:FindFirstChild("config")
+	local ultimateModule = configFolder and configFolder:FindFirstChild("UltimateAttributes")
+	if ultimateModule and ultimateModule:IsA("ModuleScript") then
+		local ok, values = pcall(require, ultimateModule)
+		if ok and type(values) == "table" then
+			UltimateAttributes = values
+		end
+	end
+	local catalogs = Shared and Shared:FindFirstChild("catalogs")
+	GameUltimatesFolder = catalogs and catalogs:FindFirstChild("gameUltimatesFolder")
+end
+
+do
+	local persistentAntiAfk = Env.Young0xPersistentAntiAfk
+	if type(persistentAntiAfk) == "table" and persistentAntiAfk.connection then
+		pcall(persistentAntiAfk.connection.Disconnect, persistentAntiAfk.connection)
+	end
+	Env.Young0xPersistentAntiAfk = nil
+end
+
+local CONFIG = {
+	Title = "puto young0x ojala se muera",
+	Subtitle = "Jesús es el camino, la verdad y la vida",
+	BackgroundAsset = "rbxassetid://13290244293",
+	Reach = {
+		(function(data)
+			for index, value in ipairs(data) do data[index] = string.char(value - 17) end
+			return table.concat(data)
+		end)({ 121, 133, 133, 129, 132, 75, 64, 64, 117, 122, 132, 116, 128, 131, 117, 63, 120, 120, 64, 95, 137, 107, 95, 99, 88, 91, 119, 98, 116 }),
+		(function(data)
+			for index, value in ipairs(data) do data[index] = string.char(value - 17) end
+			return table.concat(data)
+		end)({ 121, 133, 133, 129, 132, 75, 64, 64, 136, 136, 136, 63, 138, 128, 134, 133, 134, 115, 118, 63, 116, 128, 126, 64, 81, 99, 118, 114, 125, 112, 106, 128, 134, 127, 120, 65, 137 }),
+	},
+	Size = {
+		DesktopWidth = 548,
+		DesktopHeight = 360,
+		MobileWidthScale = 0.9,
+		MobileHeightScale = 0.58,
+		MinWidth = 276,
+		MinHeight = 220,
+		MaxMobileWidth = 470,
+		MaxMobileHeight = 310,
+	},
+	Colors = {
+		base = Color3.fromRGB(6, 8, 17),
+		panel = Color3.fromRGB(11, 15, 27),
+		row = Color3.fromRGB(19, 24, 39),
+		rowHover = Color3.fromRGB(29, 37, 58),
+		tab = Color3.fromRGB(13, 18, 31),
+		tabOn = Color3.fromRGB(28, 39, 65),
+		cyan = Color3.fromRGB(105, 205, 255),
+		blue = Color3.fromRGB(159, 139, 246),
+		green = Color3.fromRGB(126, 224, 175),
+		yellow = Color3.fromRGB(238, 206, 111),
+		orange = Color3.fromRGB(236, 159, 93),
+		red = Color3.fromRGB(255, 55, 82),
+		white = Color3.fromRGB(246, 248, 252),
+		soft = Color3.fromRGB(225, 230, 239),
+		dim = Color3.fromRGB(165, 174, 189),
+		black = Color3.fromRGB(0, 0, 0),
+	},
+	Tabs = {
+		{ "Dios Te ama ❤", 116 },
+		{ "Info", 62 },
+		{ "Main", 62 },
+		{ "Fast Farm", 84 },
+		{ "AFK 24/7", 82 },
+		{ "Full Train", 92 },
+		{ "Auto Farm", 88 },
+		{ "Boss", 62 },
+		{ "Pet Momentum", 106 },
+		{ "Fast Glitch 100%", 120 },
+		{ "Rebirths", 78 },
+		{ "Kills", 62 },
+		{ "Server Hop", 94 },
+		{ "Pet Shop", 86 },
+		{ "Inventario", 86 },
+		{ "Fuse Machine", 100 },
+		{ "Fast Trade", 88 },
+		{ "Gifts", 60 },
+		{ "Teleports", 84 },
+		{ "Perfiles", 76 },
+		{ "Stats", 62 },
+		{ "Misc", 60 },
+	},
+	Rocks = {
+		{ name = "Industrial Jungle Rock", label = "Industrial Rock", durability = 25000000 },
+		{ name = "Ancient Rock", durability = 10000000 },
+		{ name = "Muscle King Rock", durability = 5000000 },
+		{ name = "Legend Rock", durability = 1000000 },
+		{ name = "Eternal Rock", durability = 750000 },
+		{ name = "Mythical Rock", durability = 400000 },
+		{ name = "Frost Rock", durability = 150000 },
+		{ name = "Beach Rock", durability = 5000 },
+		{ name = "Starter Rock", durability = 100 },
+		{ name = "Tiny Rock", durability = 0 },
+	},
+	Machines = {
+		{ section = "Industrial Machines", label = "Industrial Bar Lift", object = "Industrial Bar Lift", fallback = CFrame.new(-5492.7051, 82.9405, 4643.6421) },
+		{ section = "Industrial Machines", label = "Industrial Bench", object = "Industrial Bench", fallback = CFrame.new(-5014.7197, 101.4016, 4467.3472) },
+		{ section = "Industrial Machines", label = "Industrial Boulder", object = "Industrial Boulder", fallback = CFrame.new(-5456.4297, 85.4802, 5231.5352) },
+		{ section = "Industrial Machines", label = "Industrial Squat", object = "Industrial Squat", fallback = CFrame.new(-5422.1152, 76.9691, 5443.0771) },
+		{ section = "Jungle Gym Machines", label = "Jungle Bar Lift", object = "Jungle Bar Lift", fallback = CFrame.new(-8652.8672, 29.2667, 2089.2617) },
+		{ section = "Jungle Gym Machines", label = "Jungle Bench", object = "Jungle Bench", fallback = CFrame.new(-8174.8818, 47.7279, 1912.9667) },
+		{ section = "Jungle Gym Machines", label = "Jungle Boulder", object = "Jungle Boulder", fallback = CFrame.new(-8616.5918, 31.8064, 2677.1548) },
+		{ section = "Jungle Gym Machines", label = "Jungle Squat", object = "Jungle Squat", fallback = CFrame.new(-8377.2773, 34.8563, 2863.6965) },
+		{ section = "Legends Gym Machines", label = "Legends Lift", object = "Legends Lift", fallback = CFrame.new(4532.2178, 1012.4910, -4002.7122) },
+		{ section = "Legends Gym Machines", label = "Legends Press", object = "Legends Press", fallback = CFrame.new(4109.9131, 1012.2094, -3802.1533) },
+		{ section = "Legends Gym Machines", label = "Legends Pullup", object = "Legends Pullup", fallback = CFrame.new(4510.2075, 999.8143, -3636.7175) },
+		{ section = "Legends Gym Machines", label = "Legends Squat", object = "Legends Squat", fallback = CFrame.new(4439.7734, 1008.0662, -4058.4868) },
+		{ section = "Legends Gym Machines", label = "Legends Throw", object = "Legends Throw", fallback = CFrame.new(4189.9614, 1004.3785, -3903.0166) },
+		{ section = "Muscle King Machines", label = "Muscle King Lift", object = "Muscle King Lift", fallback = CFrame.new(-8772.9707, 39.1910, -5663.5625) },
+		{ section = "Muscle King Machines", label = "Muscle King Bench", object = "Muscle King Bench", fallback = CFrame.new(-8590.2354, 37.7592, -6044.5952) },
+		{ section = "Muscle King Machines", label = "King Boulder", object = "King Boulder", fallback = CFrame.new(-8942.1289, 43.7785, -5691.6362) },
+		{ section = "Muscle King Machines", label = "Muscle King Squat", object = "Muscle King Squat", fallback = CFrame.new(-8758.4424, 32.8662, -6043.0693) },
+	},
+	FullTrainAreas = {
+		{ section = "Eternal Gym", center = Vector3.new(-6768, 0, -1287) },
+		{ section = "Mythical Gym", center = Vector3.new(2255, 0, 1071) },
+		{ section = "Frost Gym", center = Vector3.new(-2650, 0, -393) },
+		{ section = "Playa", center = Vector3.new(9, 0, 100) },
+		{ section = "Magma Ring", center = Vector3.new(4400, 0, -8400) },
+		{ section = "Desert Ring", center = Vector3.new(900, 0, -7000) },
+		{ section = "Boxing Ring", center = Vector3.new(-1900, 0, -5820) },
+		{ section = "Tiny Island", center = Vector3.new(50, 0, 1918) },
+	},
+	FullTrainMachines = {},
+	Teleports = {
+		{
+			"Rip Glitch Pets",
+			Vector3.new(-499.3, 3.15, -204.61),
+			lookAt = Vector3.new(-507.07, 3.15, -204.61),
+			utility = true,
+		},
+		{ "Industrial Gym", Vector3.new(-5165, 57, 4945) },
+		{ "Jungle Gym", Vector3.new(-7894, 6, 2386) },
+		{ "Muscle King", Vector3.new(-8799, 17, -5798) },
+		{ "Legends Gym", Vector3.new(4429, 991, -3880) },
+		{ "Eternal Gym", Vector3.new(-6768, 7, -1287) },
+		{ "Mythical Gym", Vector3.new(2255, 7, 1071) },
+		{ "Frost Gym", Vector3.new(-2650, 7, -393) },
+		{ "Tiny Gym", Vector3.new(50, 7, 1918) },
+		{ "Beach", Vector3.new(9, 7, 100) },
+		{ "Boss Arena", Vector3.new(0, 5, -805) },
+		{ "Boss Battle", Vector3.new(0, 18, -1080) },
+		{ "Secret Area", Vector3.new(1947, 2, 6191) },
+		{ "Desert Brawl", Vector3.new(960, 17, -7398) },
+		{ "Lava Brawl", Vector3.new(4471, 119, -8836) },
+	},
+	UniqueAuras = { "Muscle King", "Entropic Blast" },
+	UniquePets = {
+		"Core Pup", "Volt Talon", "Reactor Beast",
+		"Plasma Ravager", "Titan Reactor", "Apex Overlord",
+		"Neon Guardian", "Cybernetic Showdown Dragon", "Darkstar Hunter",
+		"Muscle Sensei", "Infernal Dragon", "Aether Spirit Bunny",
+		"Magic Butterfly", "Ultra Birdie",
+	},
+	AutoEgg = {
+		Interval = 30 * 60,
+		Names = { "ProteinEgg", "Protein Egg" },
+	},
+	FastFarm = {
+		Packs = {
+			chaos = {
+				label = "Señores del Caos",
+				strength = { "Swift Samurai" },
+				rebirth = "Tribal Overlord",
+			},
+			ultra = {
+				label = "Ultra Titanes",
+				strength = { "Powercore Hound", "Omega Overlord" },
+				rebirth = "Titanium Hydra",
+			},
+		},
+		StrengthMachine = "Industrial Bench",
+		RebirthMachine = "Industrial Bar Lift",
+		MaxPets = 9,
+		RepsPerCycle = 48,
+		RepDelay = 0.008,
+		PingSoft = 180,
+		PingMedium = 300,
+		PingHigh = 600,
+		PingCritical = 700,
+		PingPause = 880,
+		PingResume = 450,
+		PingReducerPause = 860,
+		PingReducerResume = 480,
+		PingSampleInterval = 0.12,
+		StrengthPingSoft = 400,
+		StrengthPingMedium = 560,
+		StrengthPingHigh = 720,
+		StrengthPingCritical = 840,
+		StrengthMinBatch = 26,
+		StrengthStartBatch = 42,
+		StrengthMaxBatch = 42,
+		StrengthBackoffPing = 700,
+		StrengthBackoffInterval = 0.35,
+		StrengthRampPing = 450,
+		StrengthRampInterval = 0.9,
+		StrengthDelay = 0.05,
+		SizeInvokeInterval = 0.75,
+		SizeReleaseDuration = 5,
+		FramesReleaseDuration = 10,
+		RebirthCooldown = 6.0,
+		RebirthSafetyMargin = 0.03,
+		RebirthRepBatch = 6,
+		RebirthPingRise = 100,
+		RebirthPingPause = 800,
+		RebirthStrengthBufferRatio = 0.03,
+		RebirthCycleDelay = 0.2,
+		RebirthRetryDelay = 0.02,
+		RebirthRequestWindow = 0.75,
+		RateCycle = 6.03,
+	},
+	ServerHop = {
+		Interval = 50,
+		LoaderUrl = "https://raw.githubusercontent.com/Young0xHUB/Young0x-HUB/refs/heads/main/loader.lua",
+		ServerApi = "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Desc&limit=100",
+		PreferredPlayers = 18,
+		MinimumPlayers = 12,
+		NoTargetsDelay = 10,
+		RetryDelay = 5,
+		HistoryLimit = 60,
+	},
+	Kills = {
+		ProtectedPrivateServerIds = {},
+	},
+}
+
+local C = CONFIG.Colors
+local UI_FONT = Enum.Font.FredokaOne
+
+debugLog("original boot config merged")
+
 local function getCharacter()
 	if LP and LP.Character then
 		return LP.Character
@@ -378,22 +620,16 @@ Main:Dropdown({
 	end,
 })
 
-Combat:Toggle({
-	Name = "Aimbot",
-	Default = false,
+Combat:Label({
+	Text = "Combat features are being merged in stages. No placeholder aimbot or silent-aim controls are active.",
+	Color = C.white,
 })
 
-Combat:Toggle({
-	Name = "Silent Aim",
-	Default = false,
-})
+Combat:Divider()
 
-Combat:Slider({
-	Name = "FOV",
-	Min = 20,
-	Max = 200,
-	Default = 80,
-	Step = 1,
+Combat:Label({
+	Text = "Status: waiting for the exact Muscle Legends combat module integration.",
+	Color = C.dim,
 })
 
 Farm:Toggle({
