@@ -1000,6 +1000,664 @@ ML.State.antiAfkConnection = ML.track(LP.Idled:Connect(ML.State.antiAfkPulse))
 
 Env.__FGState = ML.State
 
+local rockCache = {}
+rockCache.times = {}
+rockCache.touch = type(firetouchinterest) == "function" and firetouchinterest
+	or type(firetouchtransmitter) == "function" and firetouchtransmitter or nil
+rockCache.touchBegin = 0
+local activeRock = nil
+
+ML.rockCache = rockCache
+ML.activeRock = nil
+ML.activeRockFarm = nil
+
+local function releaseRockContacts(controller)
+	local contacts = type(controller) == "table" and controller.contacts or nil
+	if type(controller) == "table" then controller.contacts = nil end
+	if not contacts or not rockCache.touch then return end
+	for _, contact in ipairs(contacts) do
+		if contact[1] and contact[1].Parent and contact[2] and contact[2].Parent then
+			pcall(rockCache.touch, contact[1], contact[2], 1 - rockCache.touchBegin)
+		end
+	end
+end
+
+ML.releaseRockContacts = releaseRockContacts
+
+local function clearActiveRock()
+	ML.activeRock = nil
+end
+
+ML.clearActiveRock = clearActiveRock
+
+local function stopActiveRockFarm()
+	local previous = ML.activeRockFarm
+	ML.activeRockFarm = nil
+	if previous then
+		previous.enabled = false
+		if previous.thread then
+			task.cancel(previous.thread)
+			previous.thread = nil
+		end
+		releaseRockContacts(previous)
+	end
+	clearActiveRock()
+end
+
+ML.stopActiveRockFarm = stopActiveRockFarm
+
+local function clearRockSelection()
+	ML.State.rockGeneration = ML.State.rockGeneration + 1
+	ML.State.selectedRock = nil
+	ML.State.rockSessionStartedAt = nil
+	ML.State.rockVisualReadyAt = math.huge
+	stopActiveRockFarm()
+end
+
+ML.clearRockSelection = clearRockSelection
+
+local function findRock(definition)
+	if type(definition) ~= "table" then return nil end
+	local cacheKey = definition.durability
+	local cached = rockCache[cacheKey]
+	if cached and cached:IsDescendantOf(workspace) then
+		return cached
+	end
+	if os.clock() - (rockCache.times[cacheKey] or -math.huge) < 1 then return nil end
+	rockCache.times[cacheKey] = os.clock()
+	rockCache[cacheKey] = nil
+	local machinesFolder = workspace:FindFirstChild("machinesFolder")
+	if not machinesFolder then return nil end
+	for _, model in ipairs(machinesFolder:GetChildren()) do
+		local marker = model:FindFirstChild("neededDurability")
+		local rock = model:FindFirstChild("Rock")
+		if marker and marker:IsA("ValueBase") and tonumber(marker.Value) == definition.durability
+			and rock and rock:IsA("BasePart") then
+			rockCache[cacheKey] = rock
+			return rock
+		end
+	end
+	return nil
+end
+
+ML.findRock = findRock
+
+local function rockFarmIsCurrent(controller)
+	return controller and controller.enabled and ML.activeRockFarm == controller
+		and ML.State.running and ML.State.fastPunch and ML.State.rockGeneration == controller.generation
+		and ML.State.selectedRock == controller.definition
+end
+
+ML.rockFarmIsCurrent = rockFarmIsCurrent
+
+local function runRockFarm(controller)
+	while rockFarmIsCurrent(controller) do
+		if ML.State.fastPunchToolPaused then
+			releaseRockContacts(controller)
+			task.wait(0.04)
+		else
+			local ok = pcall(function()
+				if not rockFarmIsCurrent(controller) then return end
+				local definition = controller.definition
+				local durability = LP:FindFirstChild("Durability")
+				if durability and (tonumber(ML.State.getFunctionalStatValue(durability)) or 0) < definition.durability then return end
+				local character = ML.getCharacter()
+				local leftHand = character and (character:FindFirstChild("LeftHand") or character:FindFirstChild("Left Arm"))
+				local rightHand = character and (character:FindFirstChild("RightHand") or character:FindFirstChild("Right Arm"))
+				if not leftHand or not rightHand then return end
+				local rock = findRock(definition)
+				local punch = not ML.State.fastPunchToolPaused and ML.getPunch() or nil
+				local muscleEvent = LP:FindFirstChild("muscleEvent")
+				if not rock or not punch or not rockCache.touch or not muscleEvent
+					or not muscleEvent:IsA("RemoteEvent") or not rockFarmIsCurrent(controller) then return end
+				controller.lastRock = rock
+				ML.activeRock = rock
+				pcall(muscleEvent.FireServer, muscleEvent, "punch", "leftHand")
+				pcall(muscleEvent.FireServer, muscleEvent, "punch", "rightHand")
+				pcall(punch.Activate, punch)
+				ML.State.playFastPunchVisual()
+				task.wait(0.04)
+				if not rockFarmIsCurrent(controller) or ML.getCharacter() ~= character or not rock.Parent then return end
+				controller.contacts = { { rightHand, rock }, { leftHand, rock } }
+				for _, contact in ipairs(controller.contacts) do
+					pcall(rockCache.touch, contact[1], contact[2], rockCache.touchBegin)
+				end
+				task.wait(0.04)
+				releaseRockContacts(controller)
+			end)
+			if not ok then releaseRockContacts(controller) end
+			task.wait(0.08)
+		end
+	end
+	releaseRockContacts(controller)
+end
+
+ML.runRockFarm = runRockFarm
+
+local function startRockFarm(definition, previousStopped)
+	if not previousStopped then
+		clearRockSelection()
+	end
+	ML.State.selectedRock = definition
+	ML.State.rockSessionStartedAt = os.clock()
+	ML.State.rockVisualReadyAt = ML.State.rockSessionStartedAt + 0.20
+	local controller = {
+		enabled = true,
+		definition = definition,
+		generation = ML.State.rockGeneration,
+		thread = nil,
+		lastRock = nil,
+	}
+	ML.activeRockFarm = controller
+	controller.thread = task.spawn(runRockFarm, controller)
+end
+
+ML.startRockFarm = startRockFarm
+
+ML.State.fastPunchVisual = { character = nil, tracks = {}, index = 0 }
+
+ML.State.clearFastPunchVisual = function()
+	local visual = ML.State.fastPunchVisual
+	for _, track in ipairs(visual.tracks) do
+		pcall(track.Stop, track, 0.05)
+		pcall(track.Destroy, track)
+	end
+	visual.character = nil
+	visual.tracks = {}
+	visual.index = 0
+end
+
+ML.State.playFastPunchVisual = function()
+	local visual = ML.State.fastPunchVisual
+	local character = ML.getCharacter()
+	local humanoid = ML.getHumanoid()
+	local animator = humanoid and (humanoid:FindFirstChildOfClass("Animator") or humanoid:FindFirstChild("Animator"))
+	if not character or not animator then return end
+	if visual.character ~= character or #visual.tracks == 0 then
+		ML.State.clearFastPunchVisual()
+		visual.character = character
+		local shared = ReplicatedStorage:FindFirstChild("shared")
+		local assets = shared and shared:FindFirstChild("assets")
+		local animations = assets and assets:FindFirstChild("animations")
+		local gameAnims = animations and animations:FindFirstChild("gameAnims")
+		local tools = gameAnims and gameAnims:FindFirstChild("Tools")
+		local punchAnimations = tools and tools:FindFirstChild("Punch")
+		local attacks = punchAnimations and punchAnimations:FindFirstChild("attacks")
+		if attacks then
+			for _, animation in ipairs(attacks:GetChildren()) do
+				if animation:IsA("Animation") then
+					local ok, track = pcall(animator.LoadAnimation, animator, animation)
+					if ok and track then
+						track.Priority = Enum.AnimationPriority.Action
+						visual.tracks[#visual.tracks + 1] = track
+					end
+				end
+			end
+		end
+	end
+	if #visual.tracks == 0 then return end
+	visual.index = visual.index % #visual.tracks + 1
+	for index, track in ipairs(visual.tracks) do
+		if index ~= visual.index and track.IsPlaying then
+			pcall(track.Stop, track, 0.02)
+		end
+	end
+	pcall(visual.tracks[visual.index].Play, visual.tracks[visual.index], 0.02, 1, 1.8)
+end
+
+ML.getPunch = function()
+	local character = ML.getCharacter()
+	local humanoid = ML.getHumanoid()
+	if not character or not humanoid then
+		return nil
+	end
+	for _, container in ipairs({ character, LP:FindFirstChild("Backpack") }) do
+		if container then
+			for _, child in ipairs(container:GetChildren()) do
+				if child:IsA("Tool") and child.Name:lower() == "punch" then
+					if child.Parent ~= character then
+						humanoid:EquipTool(child)
+					end
+					return child
+				end
+			end
+		end
+	end
+	return nil
+end
+
+ML.setFastPunch = function(enabled)
+	ML.State.fastPunchGeneration = ML.State.fastPunchGeneration + 1
+	local generation = ML.State.fastPunchGeneration
+	ML.State.fastPunch = enabled == true
+	if not ML.State.fastPunch then
+		ML.State.fastPunchToolPaused = false
+		clearRockSelection()
+		ML.stopThread("fastPunchEquip")
+		ML.stopThread("fastPunchHit")
+		ML.State.clearFastPunchVisual()
+		pcall(function()
+			local character = ML.getCharacter()
+			local punch = character and character:FindFirstChild("Punch")
+			local attackTime = punch and punch:FindFirstChild("attackTime")
+			if attackTime then attackTime.Value = 0.3 end
+			local backpack = LP:FindFirstChild("Backpack")
+			if punch and backpack then punch.Parent = backpack end
+		end)
+		return
+	end
+	ML.startThread("fastPunchEquip", function()
+		while ML.State.running and ML.State.fastPunch and ML.State.fastPunchGeneration == generation do
+			pcall(function()
+				local punch = not ML.State.fastPunchToolPaused and ML.getPunch() or nil
+				local attackTime = punch and punch:FindFirstChild("attackTime")
+				if attackTime then attackTime.Value = 0 end
+			end)
+			task.wait(0.05)
+		end
+	end)
+	ML.startThread("fastPunchHit", function()
+		local lastVisual = 0
+		while ML.State.running and ML.State.fastPunch and ML.State.fastPunchGeneration == generation do
+			if not ML.activeRockFarm then
+				local event = LP:FindFirstChild("muscleEvent")
+				local punch = not ML.State.fastPunchToolPaused and ML.getPunch() or nil
+				if event and event:IsA("RemoteEvent") then
+					pcall(event.FireServer, event, "punch", "rightHand")
+					pcall(event.FireServer, event, "punch", "leftHand")
+				end
+				if punch and time() - lastVisual >= 0.12 then
+					lastVisual = time()
+					pcall(punch.Activate, punch)
+					ML.State.playFastPunchVisual()
+				end
+			end
+			task.wait(0.01)
+		end
+	end)
+end
+
+local repTimeOriginals = {}
+ML.repTimeOriginals = repTimeOriginals
+
+do
+	local movement = ML.State.exerciseMovement
+	movement.toolKinds = {
+		["weight"] = "Weight",
+		["heavy weight"] = "Weight",
+		["handstand"] = "Handstands",
+		["handstands"] = "Handstands",
+		["pushup"] = "Pushups",
+		["pushups"] = "Pushups",
+		["situp"] = "Situps",
+		["situps"] = "Situps",
+	}
+	movement.animationIds = {}
+	movement.idsFor = function(kind)
+		local cached = movement.animationIds[kind]
+		if cached then return cached end
+		cached = {}
+		local shared = ReplicatedStorage:FindFirstChild("shared")
+		local assets = shared and shared:FindFirstChild("assets")
+		local animations = assets and assets:FindFirstChild("animations")
+		local gameAnims = animations and animations:FindFirstChild("gameAnims")
+		local tools = gameAnims and gameAnims:FindFirstChild("Tools")
+		local folder = tools and tools:FindFirstChild(kind)
+		if folder then
+			for _, animation in ipairs(folder:GetDescendants()) do
+				if animation:IsA("Animation") and animation.AnimationId ~= "" then
+					cached[animation.AnimationId] = true
+				end
+			end
+		end
+		movement.animationIds[kind] = cached
+		return cached
+	end
+	movement.stopTracks = function(humanoid, kind)
+		local animator = humanoid and humanoid:FindFirstChildOfClass("Animator")
+		if not animator or not kind then return end
+		local ids = movement.idsFor(kind)
+		for _, animationTrack in ipairs(animator:GetPlayingAnimationTracks()) do
+			local animation = animationTrack.Animation
+			if animation and ids[animation.AnimationId] then
+				animationTrack:Stop(0.03)
+			end
+		end
+	end
+end
+
+ML.setFastRepTime = function(key, tool)
+	if not tool then return end
+	local repTime = tool:FindFirstChild("repTime")
+	if not repTime or not repTime:IsA("ValueBase") then return end
+	repTimeOriginals[key] = repTimeOriginals[key] or setmetatable({}, { __mode = "k" })
+	if repTimeOriginals[key][repTime] == nil then
+		repTimeOriginals[key][repTime] = repTime.Value
+	end
+	repTime.Value = 0
+end
+
+ML.restoreRepTime = function(key)
+	local saved = repTimeOriginals[key]
+	if not saved then return end
+	for repTime, original in pairs(saved) do
+		if repTime and repTime.Parent then
+			pcall(function()
+				repTime.Value = original
+			end)
+		end
+	end
+	repTimeOriginals[key] = nil
+end
+
+ML.unequipRepTools = function(tools)
+	local character = ML.getCharacter()
+	local backpack = LP:FindFirstChild("Backpack")
+	if not character or not backpack or not tools then return end
+	local wanted = {}
+	for _, name in ipairs(tools) do
+		wanted[name:lower()] = true
+	end
+	for _, tool in ipairs(character:GetChildren()) do
+		if tool:IsA("Tool") and wanted[tool.Name:lower()] then
+			pcall(function()
+				tool.Parent = backpack
+			end)
+		end
+	end
+end
+
+ML.setAutoRep = function(key, enabled, tools, interval, forceFast)
+	ML.State[key] = enabled == true
+	local movement = ML.State.exerciseMovement
+	movement.active[key] = ML.State[key] or nil
+	local threadKey = "rep_" .. key
+	if not ML.State[key] then
+		ML.stopThread(threadKey)
+		ML.restoreRepTime(key)
+		ML.unequipRepTools(tools)
+		local hasActiveExercise = false
+		for _ in pairs(movement.active) do
+			hasActiveExercise = true
+			break
+		end
+		if not hasActiveExercise then
+			ML.stopThread("exerciseMovement")
+			local humanoid = movement.humanoid
+			if humanoid and humanoid.Parent then
+				pcall(function()
+					if not ML.State.fastSpeed and movement.walkSpeed then
+						humanoid.WalkSpeed = movement.walkSpeed
+					end
+					if movement.jumpValue then
+						if movement.usesJumpPower then
+							humanoid.JumpPower = movement.jumpValue
+						else
+							humanoid.JumpHeight = movement.jumpValue
+						end
+					end
+				end)
+			end
+			movement.humanoid = nil
+			movement.walkSpeed = nil
+			movement.jumpValue = nil
+		end
+		return
+	end
+	local humanoid = ML.getHumanoid()
+	if humanoid and movement.humanoid ~= humanoid then
+		movement.humanoid = humanoid
+		movement.walkSpeed = humanoid.WalkSpeed > 0 and humanoid.WalkSpeed or 16
+		movement.usesJumpPower = humanoid.UseJumpPower
+		movement.jumpValue = movement.usesJumpPower and humanoid.JumpPower or humanoid.JumpHeight
+	end
+	ML.startThread("exerciseMovement", function()
+		while ML.State.running and next(movement.active) do
+			local activeHumanoid = ML.getHumanoid()
+			local root = ML.getRoot()
+			if activeHumanoid then
+				if movement.humanoid ~= activeHumanoid then
+					movement.humanoid = activeHumanoid
+					movement.walkSpeed = activeHumanoid.WalkSpeed > 0 and activeHumanoid.WalkSpeed or 16
+					movement.usesJumpPower = activeHumanoid.UseJumpPower
+					movement.jumpValue = movement.usesJumpPower and activeHumanoid.JumpPower or activeHumanoid.JumpHeight
+				end
+				if not ML.State.machine and not ML.State.fly then
+					if root then root.Anchored = false end
+					activeHumanoid.PlatformStand = false
+					activeHumanoid.Sit = false
+					local wantedSpeed = ML.State.fastSpeed and 1000 or movement.walkSpeed
+					if wantedSpeed and activeHumanoid.WalkSpeed < wantedSpeed then
+						activeHumanoid.WalkSpeed = wantedSpeed
+					end
+					if movement.jumpValue then
+						if movement.usesJumpPower and activeHumanoid.JumpPower < movement.jumpValue then
+							activeHumanoid.JumpPower = movement.jumpValue
+						elseif not movement.usesJumpPower and activeHumanoid.JumpHeight < movement.jumpValue then
+							activeHumanoid.JumpHeight = movement.jumpValue
+						end
+					end
+				end
+			end
+			RunService.Heartbeat:Wait()
+		end
+	end)
+	ML.startThread(threadKey, function()
+		while ML.State.running and ML.State[key] do
+			local repDelay = interval or 0.01
+			pcall(function()
+				local tool
+				if tools and #tools > 0 then
+					tool = ML.equipTool and ML.equipTool(tools) or nil
+					if forceFast or ML.State.autoFarmMode == "Fast Rep" or ML.State.autoFarmMode == "Super Fast Rep" then
+						ML.setFastRepTime(key, tool)
+					else
+						ML.restoreRepTime(key)
+						local repTime = tool and tool:FindFirstChild("repTime", true)
+						repDelay = math.max(0.02, tonumber(repTime and repTime.Value) or 1)
+						local owned = LP:FindFirstChild("ownedGamepasses")
+						if owned and owned:FindFirstChild("x2 Rep Time") then
+							repDelay = repDelay * 0.02
+						end
+					end
+				end
+				local event = LP:FindFirstChild("muscleEvent")
+				if event then
+					if ML.State.autoFarmMode == "Super Fast Rep" then
+						for _ = 1, 10 do
+							event:FireServer("rep")
+						end
+					else
+						event:FireServer("rep")
+					end
+				end
+			end)
+			task.wait(repDelay)
+		end
+	end)
+end
+
+ML.findProteinEgg = function()
+	for _, container in ipairs({
+		ML.getCharacter(),
+		LP:FindFirstChild("Backpack"),
+	}) do
+		if container then
+			for _, egg in ipairs(container:GetChildren()) do
+				if egg:IsA("Tool") and table.find(CONFIG.AutoEgg.Names, egg.Name)
+					and egg:GetAttribute("Used") ~= true then
+					return egg
+				end
+			end
+		end
+	end
+	return nil
+end
+
+ML.hasProteinEggBoost = function()
+	local boostTimers = LP:FindFirstChild("boostTimersFolder")
+	if not boostTimers then return false end
+	for _, name in ipairs(CONFIG.AutoEgg.Names) do
+		local timer = boostTimers:FindFirstChild(name)
+		if timer and timer:IsA("ValueBase") and tonumber(timer.Value) and timer.Value > 0 then
+			return true
+		end
+	end
+	return false
+end
+
+ML.countProteinEggs = function()
+	local total = 0
+	for _, container in ipairs({
+		ML.getCharacter(),
+		LP:FindFirstChild("Backpack"),
+		LP:FindFirstChild("consumablesFolder"),
+	}) do
+		if container then
+			for _, egg in ipairs(container:GetChildren()) do
+				if (egg:IsA("Tool") or egg:IsA("StringValue")) and table.find(CONFIG.AutoEgg.Names, egg.Name) then
+					total = total + 1
+				end
+			end
+		end
+	end
+	return total
+end
+
+ML.hubNotify = function(text, duration)
+	pcall(function()
+		local message = tostring(text or "")
+		if type(ML.State.translateText) == "function" then message = ML.State.translateText(message) end
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title = "Young0x Hub",
+			Text = message,
+			Duration = tonumber(duration) or 4,
+		})
+	end)
+end
+
+ML.State.eggBusy = false
+ML.State.eatProteinEgg = function(force)
+	if not force and ML.hasProteinEggBoost() then return true end
+	if ML.State.eggBusy then return false end
+	local egg = ML.findProteinEgg()
+	local character = ML.getCharacter()
+	local muscleEvent = LP:FindFirstChild("muscleEvent")
+	if not egg or not character or not muscleEvent or not muscleEvent:IsA("RemoteEvent") then
+		return false
+	end
+	ML.State.eggBusy = true
+	local ok, consumed = pcall(function()
+		local originalParent = egg.Parent
+		local originalUsed = egg:GetAttribute("Used")
+		local beforeCount = ML.countProteinEggs()
+		local hadBoost = ML.hasProteinEggBoost()
+		local function confirmed()
+			return not egg.Parent or ML.countProteinEggs() < beforeCount
+				or (not hadBoost and ML.hasProteinEggBoost())
+		end
+		if egg.Parent ~= character then
+			egg.Parent = character
+			task.wait(0.2)
+		end
+		if confirmed() then return true end
+		egg:SetAttribute("Used", true)
+		muscleEvent:FireServer("proteinEgg", egg)
+		local deadline = time() + 3
+		while time() < deadline do
+			if confirmed() then return true end
+			task.wait(0.1)
+		end
+		if egg.Parent then egg:SetAttribute("Used", originalUsed) end
+		if egg.Parent == character and originalParent and originalParent.Parent then
+			egg.Parent = originalParent
+		end
+		return false
+	end)
+	ML.State.eggBusy = false
+	return ok and consumed == true
+end
+
+do
+	local function parseBoostTime(text)
+		text = tostring(text or "")
+		local hours = tonumber(text:match("(%d+)%s*[hH]")) or 0
+		local minutes = tonumber(text:match("(%d+)%s*[mM]")) or 0
+		local seconds = tonumber(text:match("(%d+)%s*[sS]")) or 0
+		local total = hours * 3600 + minutes * 60 + seconds
+		return total > 0 and total or nil
+	end
+
+	local function visibleStrengthBoostRemaining()
+		local boostTimers = LP:FindFirstChild("boostTimersFolder")
+		if boostTimers then
+			for _, name in ipairs(CONFIG.AutoEgg.Names) do
+				local timer = boostTimers:FindFirstChild(name)
+				local remaining = timer and tonumber(timer.Value)
+				if remaining and remaining > 0 then
+					return remaining
+				end
+			end
+		end
+		return 0
+	end
+
+	ML.State.autoEggSources = { manual = false, fastFarm = false, rebirth = false }
+	ML.State.autoEggNextAt = 0
+	ML.State.autoEggImmediateRequested = false
+
+	ML.State.setAutoEgg = function(enabled, source)
+		source = source or "manual"
+		local wasEnabled = ML.State.autoEggSources[source] == true
+		ML.State.autoEggSources[source] = enabled == true
+		if enabled == true and not wasEnabled then
+			ML.State.autoEggImmediateRequested = true
+		end
+		local desired = false
+		for _, active in pairs(ML.State.autoEggSources) do
+			if active then
+				desired = true
+				break
+			end
+		end
+		if ML.State.autoEgg == desired then
+			return
+		end
+		ML.State.autoEgg = desired
+		if not desired then
+			ML.State.autoEggImmediateRequested = false
+			ML.stopThread("autoEgg")
+			return
+		end
+		ML.startThread("autoEgg", function()
+			while ML.State.running and ML.State.autoEgg do
+				local now = time()
+				if ML.State.autoEggImmediateRequested then
+					ML.State.autoEggImmediateRequested = false
+					if ML.State.eatProteinEgg(false) then
+						ML.State.autoEggNextAt = now + CONFIG.AutoEgg.Interval
+					else
+						ML.State.autoEggNextAt = now + 10
+					end
+				else
+					local remaining = visibleStrengthBoostRemaining()
+					if remaining > 0 then
+						ML.State.autoEggNextAt = math.max(ML.State.autoEggNextAt, now + remaining)
+					end
+					if now >= ML.State.autoEggNextAt then
+						if ML.State.eatProteinEgg(false) then
+							ML.State.autoEggNextAt = now + CONFIG.AutoEgg.Interval
+						else
+							ML.State.autoEggNextAt = now + 10
+						end
+					end
+				end
+				task.wait(1)
+			end
+		end)
+	end
+end
+
 debugLog("exact ML helper layer merged")
 
 safeUiNotify(UI, {
