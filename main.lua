@@ -1,11 +1,11 @@
 -- ============================================================
 -- MUSCLE LEGENDS ULTIMATE (AIRFLOW UI)
--- COMPLETE ENGLISH PORT - All features preserved
+-- COMPLETE EXACT PORT - All features from original
 -- ============================================================
 
 -- ============================================================
 -- MUSCLE LEGENDS ULTIMATE (AIRFLOW UI)
--- ENGLISH EXACT PORT - All features preserved
+-- COMPLETE EXACT PORT - All features from original
 -- ============================================================
 
 local AirFlow = loadstring(game:HttpGet("https://raw.githubusercontent.com/confessess/AIRFLOW0978109571095710975/main/source.lua"))()
@@ -24,9 +24,10 @@ local HttpService = game:GetService("HttpService")
 
 local LP = Players.LocalPlayer
 local PlayerGui = LP:WaitForChild("PlayerGui")
+local Env = getgenv and getgenv() or _G
 
 -- ============================================================
--- CONFIGURATION
+-- CONFIGURATION (from original)
 -- ============================================================
 local CONFIG = {
     Title = "Muscle Legends Ultimate",
@@ -161,7 +162,7 @@ local CONFIG = {
 }
 
 -- ============================================================
--- STATE MANAGEMENT
+-- STATE MANAGEMENT (from original)
 -- ============================================================
 local State = {
     running = true,
@@ -472,10 +473,9 @@ end
 print("[Muscle Legends] Part 1 loaded - Core utilities")
 
 -- ============================================================
--- PART 2: FAST PUNCH, ROCK FARM, AND EXERCISE SYSTEMS
+-- PART 2: FAST PUNCH AND ROCK FARM (from original)
 -- ============================================================
 
--- Fast Punch System
 local rockCache = {}
 rockCache.times = {}
 rockCache.touch = type(firetouchinterest) == "function" and firetouchinterest
@@ -724,6 +724,12 @@ local function setFastPunch(enabled)
         end
     end)
 end
+
+print("[Muscle Legends] Part 2 loaded - Fast Punch and Rock Farm")
+
+-- ============================================================
+-- PART 3: EXERCISE SYSTEM AND AUTO EGG (from original)
+-- ============================================================
 
 -- Exercise Movement System
 do
@@ -1022,12 +1028,6 @@ local function setAutoRep(key, enabled, tools, interval, forceFast)
     end)
 end
 
-print("[Muscle Legends] Part 2 loaded - Fast Punch and Exercise systems")
-
--- ============================================================
--- PART 3: AUTO EGG, MACHINE SYSTEM, AND FAST FARM
--- ============================================================
-
 -- Auto Egg System
 local function findProteinEgg()
     for _, container in ipairs({
@@ -1227,7 +1227,12 @@ do
     end
 end
 
--- Machine System
+print("[Muscle Legends] Part 3 loaded - Exercise System and Auto Egg")
+
+-- ============================================================
+-- PART 4: MACHINE SYSTEM (from original)
+-- ============================================================
+
 local machineGeneration = 0
 local machineFunctions = nil
 FastFarm = {}
@@ -1577,10 +1582,10 @@ local function leaveMachine()
     end
 end
 
-print("[Muscle Legends] Part 3 loaded - Auto Egg and Machine systems")
+print("[Muscle Legends] Part 4 loaded - Machine System")
 
 -- ============================================================
--- PART 4: FAST FARM SYSTEM (COMPLETE)
+-- PART 5: FAST FARM SYSTEM (from original)
 -- ============================================================
 
 FastFarm.generation = 0
@@ -1876,13 +1881,12 @@ function FastFarm:LoadPack(force)
     return sCount > 0, rCount > 0
 end
 
-print("[Muscle Legends] Part 4 loaded - Fast Farm system")
+print("[Muscle Legends] Part 5 loaded - Fast Farm System")
 
 -- ============================================================
--- PART 5: KILL SYSTEM, SERVER HOP, AND MOVEMENT
+-- PART 6: KILL SYSTEM AND SERVER HOP (from original)
 -- ============================================================
 
--- Kill System
 do
     local BrawlState = ReplicatedStorage:WaitForChild("shared"):WaitForChild("state"):WaitForChild("Brawl")
     local BrawlEvent = ReplicatedStorage:WaitForChild("rEvents"):WaitForChild("brawlEvent")
@@ -3275,10 +3279,10 @@ do
     end
 end
 
-print("[Muscle Legends] Part 5 loaded - Kill system and Server Hop")
+print("[Muscle Legends] Part 6 loaded - Kill System and Server Hop")
 
 -- ============================================================
--- PART 6: MOVEMENT, ANTI-LAG, AND UTILITY SYSTEMS
+-- PART 7: MOVEMENT AND UTILITY SYSTEMS (from original)
 -- ============================================================
 
 -- Movement Systems
@@ -3906,142 +3910,10 @@ local function setRemovePortals(enabled)
     end
 end
 
--- Auto Spin Wheel System
-State.fortuneSpinRaw = function()
-    if State.rewardDataValue then
-        local purchased = State.rewardDataValue("purchasedSpins")
-        local free = State.rewardDataValue("freeWheelSpins")
-        if type(purchased) == "number" or type(free) == "number" then
-            return math.max(0, math.floor((tonumber(purchased) or 0) + (tonumber(free) or 0)))
-        end
-    end
-    local menu = PlayerGui:FindFirstChild("fortuneWheelMenuGui")
-    local label = menu and menu:FindFirstChild("spinAmountLabel", true)
-    if not label or not label:IsA("TextLabel") then return nil end
-    return tonumber(tostring(label.Text or ""):match("(%d+)"))
-end
-
-State.fortuneCooldownRemaining = function()
-    local serverUntil = tonumber(LP:GetAttribute("FortuneWheelCooldownUntil")) or 0
-    return math.max(0, serverUntil - workspace:GetServerTimeNow(),
-        (State.fortuneRetryAt or 0) - os.clock(), (State.fortuneNextAt or 0) - os.clock())
-end
-
-State.fortuneSpinAmount = function()
-    if State.fortuneCooldownRemaining() > 0 then return nil end
-    local amount = State.fortuneSpinRaw()
-    local pending = State.fortunePending
-    if pending then
-        if amount and amount < pending.before then
-            State.fortunePending = nil
-        elseif (pending.returned or pending.cancelled) and os.clock() >= (pending.releaseAt or math.huge) then
-            State.fortunePending = nil
-        else return nil end
-    end
-    return amount
-end
-
-State.syncAvailabilityToggle = function(toggle, enabled)
-    if toggle and toggle:Get() ~= enabled then toggle:Set(enabled, true) end
-end
-
-local function setAutoSpinWheel(enabled)
-    enabled = enabled == true
-    if not enabled then
-        State.autoSpinWheel = false
-        local pending = State.fortunePending
-        if pending and not pending.returned then
-            pending.cancelled = true
-            pending.releaseAt = math.max(State.fortuneNextAt or 0, os.clock() + 20)
-        end
-        stopThread("fortuneWheel")
-        if State.rewardsBusy == "wheel" then State.rewardsBusy = nil end
-        State.syncAvailabilityToggle(State.autoSpinToggle, false)
-        return true
-    end
-    if State.autoSpinWheel then return true end
-    local available = State.fortuneSpinAmount()
-    if State.rewardsBusy or not available or available <= 0 then return false end
-    local events = ReplicatedStorage:FindFirstChild("rEvents")
-    local remote = events and events:FindFirstChild("openFortuneWheelRemote")
-    local shared = ReplicatedStorage:FindFirstChild("shared")
-    local catalogs = shared and shared:FindFirstChild("catalogs")
-    local chances = catalogs and catalogs:FindFirstChild("fortuneWheelChances")
-    local wheel = chances and chances:FindFirstChild("Fortune Wheel")
-    if not remote or not remote:IsA("RemoteFunction") or not wheel then return false end
-    State.autoSpinWheel = true
-    State.rewardsBusy = "wheel"
-    State.fortuneLastSpins = 0
-    State.fortuneLastError = nil
-    startThread("fortuneWheel", function()
-        local ok, problem = pcall(function()
-            local rejections = 0
-            while State.running and State.autoSpinWheel do
-                if not State.running or not State.autoSpinWheel then break end
-                while State.running and State.autoSpinWheel and State.fortuneCooldownRemaining() > 0 do
-                    task.wait(math.min(.25, State.fortuneCooldownRemaining()))
-                end
-                if not State.running or not State.autoSpinWheel then break end
-                local before = State.fortuneSpinRaw()
-                if not before or before <= 0 then break end
-                local pending = { before = before, at = os.clock(), returned = false }
-                State.fortunePending = pending
-                State.fortuneNextAt = os.clock() + .25
-                local sent, result = pcall(remote.InvokeServer, remote, "openFortuneWheel", wheel)
-                pending.returned = true
-                pending.releaseAt = math.max(State.fortuneNextAt, os.clock() + .5)
-                local valid = sent and type(result) == "table" and type(result.name) == "string"
-                    and type(result.rarity) == "string" and type(result.image) == "string" and typeof(result.itemColor) == "Color3"
-                State.fortuneLastRequest = { before = before, at = pending.at, returnedAt = os.clock(), sent = sent,
-                    valid = valid, reply = type(result) == "table" and tostring(result.name) or tostring(result) }
-                if not valid then
-                    State.fortunePending = nil
-                    rejections = rejections + 1
-                    local retryDelay = math.min(.35 + rejections * .2, 2.5)
-                    State.fortuneRetryAt = os.clock() + retryDelay
-                    State.fortuneLastError = sent and "The wheel did not accept the spin" or "Waiting for spin confirmation"
-                    task.wait(retryDelay)
-                else
-                    local confirmed = false
-                    local deadline = os.clock() + 4
-                    repeat
-                        task.wait(.1)
-                        local remaining = State.fortuneSpinRaw()
-                        State.fortuneLastRequest.after = remaining
-                        confirmed = remaining ~= nil and remaining < before
-                    until confirmed or os.clock() >= deadline or not State.running or not State.autoSpinWheel
-                    if not confirmed then
-                        State.fortunePending = nil
-                        rejections = rejections + 1
-                        local retryDelay = math.min(.35 + rejections * .2, 2.5)
-                        State.fortuneRetryAt = os.clock() + retryDelay
-                        State.fortuneLastError = "Waiting for spin confirmation"
-                        task.wait(retryDelay)
-                    else
-                        State.fortunePending = nil
-                        State.fortuneLastError = nil
-                        State.fortuneLastSpins = State.fortuneLastSpins + 1
-                        rejections = 0
-                        if State.pushOutput then State.pushOutput("REWARD", "Fortune Wheel · +1 confirmed spin") end
-                        task.wait(.08)
-                    end
-                end
-            end
-        end)
-        if not ok then State.fortuneLastError = tostring(problem) end
-        State.autoSpinWheel = false
-        if State.rewardsBusy == "wheel" then State.rewardsBusy = nil end
-        State.syncAvailabilityToggle(State.autoSpinToggle, false)
-        if State.fortuneLastError and State.pushOutput then State.pushOutput("ERROR", State.fortuneLastError) end
-        if State.refreshMiscAvailability then State.refreshMiscAvailability() end
-    end)
-    return true
-end
-
-print("[Muscle Legends] Part 6 loaded - Movement and utility systems")
+print("[Muscle Legends] Part 7 loaded - Movement and Utility Systems")
 
 -- ============================================================
--- PART 7: CHEST SYSTEM, PET MOMENTUM, AND AIRFLOW GUI
+-- PART 8: CHEST SYSTEM, PET MOMENTUM, AND REMAINING FEATURES
 -- ============================================================
 
 -- Chest System
@@ -4085,7 +3957,7 @@ end)
 
 State.rewardDataValue = function(key)
     if not ChestData then return nil end
-    local ok, value = pcall(function() return ChestData:TryIndex({ key }) end)
+    local ok, value = pcall(function() return ChestData:TryIndex({key}) end)
     return ok and value or nil
 end
 
@@ -4472,7 +4344,144 @@ addCleanup(function()
     State.rewardsBusy = nil
 end)
 
--- Pet Momentum System
+-- Auto Spin Wheel System
+State.fortuneSpinRaw = function()
+    if State.rewardDataValue then
+        local purchased = State.rewardDataValue("purchasedSpins")
+        local free = State.rewardDataValue("freeWheelSpins")
+        if type(purchased) == "number" or type(free) == "number" then
+            return math.max(0, math.floor((tonumber(purchased) or 0) + (tonumber(free) or 0)))
+        end
+    end
+    local menu = PlayerGui:FindFirstChild("fortuneWheelMenuGui")
+    local label = menu and menu:FindFirstChild("spinAmountLabel", true)
+    if not label or not label:IsA("TextLabel") then return nil end
+    return tonumber(tostring(label.Text or ""):match("(%d+)"))
+end
+
+State.fortuneCooldownRemaining = function()
+    local serverUntil = tonumber(LP:GetAttribute("FortuneWheelCooldownUntil")) or 0
+    return math.max(0, serverUntil - workspace:GetServerTimeNow(),
+        (State.fortuneRetryAt or 0) - os.clock(), (State.fortuneNextAt or 0) - os.clock())
+end
+
+State.fortuneSpinAmount = function()
+    if State.fortuneCooldownRemaining() > 0 then return nil end
+    local amount = State.fortuneSpinRaw()
+    local pending = State.fortunePending
+    if pending then
+        if amount and amount < pending.before then
+            State.fortunePending = nil
+        elseif (pending.returned or pending.cancelled) and os.clock() >= (pending.releaseAt or math.huge) then
+            State.fortunePending = nil
+        else return nil end
+    end
+    return amount
+end
+
+State.syncAvailabilityToggle = function(toggle, enabled)
+    if toggle and toggle:Get() ~= enabled then toggle:Set(enabled, true) end
+end
+
+local function setAutoSpinWheel(enabled)
+    enabled = enabled == true
+    if not enabled then
+        State.autoSpinWheel = false
+        local pending = State.fortunePending
+        if pending and not pending.returned then
+            pending.cancelled = true
+            pending.releaseAt = math.max(State.fortuneNextAt or 0, os.clock() + 20)
+        end
+        stopThread("fortuneWheel")
+        if State.rewardsBusy == "wheel" then State.rewardsBusy = nil end
+        State.syncAvailabilityToggle(State.autoSpinToggle, false)
+        return true
+    end
+    if State.autoSpinWheel then return true end
+    local available = State.fortuneSpinAmount()
+    if State.rewardsBusy or not available or available <= 0 then return false end
+    local events = ReplicatedStorage:FindFirstChild("rEvents")
+    local remote = events and events:FindFirstChild("openFortuneWheelRemote")
+    local shared = ReplicatedStorage:FindFirstChild("shared")
+    local catalogs = shared and shared:FindFirstChild("catalogs")
+    local chances = catalogs and catalogs:FindFirstChild("fortuneWheelChances")
+    local wheel = chances and chances:FindFirstChild("Fortune Wheel")
+    if not remote or not remote:IsA("RemoteFunction") or not wheel then return false end
+    State.autoSpinWheel = true
+    State.rewardsBusy = "wheel"
+    State.fortuneLastSpins = 0
+    State.fortuneLastError = nil
+    startThread("fortuneWheel", function()
+        local ok, problem = pcall(function()
+            local rejections = 0
+            while State.running and State.autoSpinWheel do
+                if not State.running or not State.autoSpinWheel then break end
+                while State.running and State.autoSpinWheel and State.fortuneCooldownRemaining() > 0 do
+                    task.wait(math.min(.25, State.fortuneCooldownRemaining()))
+                end
+                if not State.running or not State.autoSpinWheel then break end
+                local before = State.fortuneSpinRaw()
+                if not before or before <= 0 then break end
+                local pending = { before = before, at = os.clock(), returned = false }
+                State.fortunePending = pending
+                State.fortuneNextAt = os.clock() + .25
+                local sent, result = pcall(remote.InvokeServer, remote, "openFortuneWheel", wheel)
+                pending.returned = true
+                pending.releaseAt = math.max(State.fortuneNextAt, os.clock() + .5)
+                local valid = sent and type(result) == "table" and type(result.name) == "string"
+                    and type(result.rarity) == "string" and type(result.image) == "string" and typeof(result.itemColor) == "Color3"
+                State.fortuneLastRequest = { before = before, at = pending.at, returnedAt = os.clock(), sent = sent,
+                    valid = valid, reply = type(result) == "table" and tostring(result.name) or tostring(result) }
+                if not valid then
+                    State.fortunePending = nil
+                    rejections = rejections + 1
+                    local retryDelay = math.min(.35 + rejections * .2, 2.5)
+                    State.fortuneRetryAt = os.clock() + retryDelay
+                    State.fortuneLastError = sent and "The wheel did not accept the spin" or "Waiting for spin confirmation"
+                    task.wait(retryDelay)
+                else
+                    local confirmed = false
+                    local deadline = os.clock() + 4
+                    repeat
+                        task.wait(.1)
+                        local remaining = State.fortuneSpinRaw()
+                        State.fortuneLastRequest.after = remaining
+                        confirmed = remaining ~= nil and remaining < before
+                    until confirmed or os.clock() >= deadline or not State.running or not State.autoSpinWheel
+                    if not confirmed then
+                        State.fortunePending = nil
+                        rejections = rejections + 1
+                        local retryDelay = math.min(.35 + rejections * .2, 2.5)
+                        State.fortuneRetryAt = os.clock() + retryDelay
+                        State.fortuneLastError = "Waiting for spin confirmation"
+                        task.wait(retryDelay)
+                    else
+                        State.fortunePending = nil
+                        State.fortuneLastError = nil
+                        State.fortuneLastSpins = State.fortuneLastSpins + 1
+                        rejections = 0
+                        if State.pushOutput then State.pushOutput("REWARD", "Fortune Wheel · +1 confirmed spin") end
+                        task.wait(.08)
+                    end
+                end
+            end
+        end)
+        if not ok then State.fortuneLastError = tostring(problem) end
+        State.autoSpinWheel = false
+        if State.rewardsBusy == "wheel" then State.rewardsBusy = nil end
+        State.syncAvailabilityToggle(State.autoSpinToggle, false)
+        if State.fortuneLastError and State.pushOutput then State.pushOutput("ERROR", State.fortuneLastError) end
+        if State.refreshMiscAvailability then State.refreshMiscAvailability() end
+    end)
+    return true
+end
+
+print("[Muscle Legends] Part 8 loaded - Chest System and Auto Spin")
+
+-- ============================================================
+-- PART 9: PET MOMENTUM SYSTEM (from original)
+-- ============================================================
+
 FastFarm.PetMomentum = FastFarm.PetMomentum or {}
 do
     local PetMomentum = FastFarm.PetMomentum
@@ -4965,10 +4974,10 @@ do
     end)
 end
 
-print("[Muscle Legends] Part 7 loaded - Chest system and Pet Momentum")
+print("[Muscle Legends] Part 9 loaded - Pet Momentum")
 
 -- ============================================================
--- PART 8: AIRFLOW GUI
+-- PART 10: AIRFLOW GUI
 -- ============================================================
 
 -- Create Window
@@ -5037,7 +5046,6 @@ MainTab:Button({
 MainTab:Button({
     Title = "Redeem All Codes",
     Callback = function()
-        -- Code redemption logic would go here
         hubNotify("Redeeming codes...")
     end
 })
@@ -5222,7 +5230,6 @@ AFKTab:Toggle({
         if enabled then
             State.afk.startedAt = os.clock()
             hubNotify("AFK mode started: " .. State.afk.mode)
-            -- Start the selected AFK mode
             if State.afk.mode == "Fast Rebirth" then
                 FastFarm:Start("rebirth")
             elseif State.afk.mode == "Auto Farm Kills" then
@@ -5280,7 +5287,6 @@ for _, area in ipairs(CONFIG.FullTrainAreas) do
     FullTrainTab:Button({
         Title = "Train at " .. area.section,
         Callback = function()
-            -- Teleport to area and start training
             local root = getRoot()
             if root then
                 root.CFrame = CFrame.new(area.center + Vector3.new(0, 10, 0))
@@ -5919,6 +5925,6 @@ end
 
 State.antiAfkConnection = track(LP.Idled:Connect(State.antiAfkPulse))
 
-print("[Muscle Legends] Part 8 loaded - AIRFLOW GUI")
+print("[Muscle Legends] Part 10 loaded - AIRFLOW GUI")
 print("[Muscle Legends] All parts loaded successfully!")
 print("[Muscle Legends] Script ready to use!")
