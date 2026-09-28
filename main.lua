@@ -67,6 +67,50 @@ else
 	}
 end
 
+local function safeUiWindow(spec)
+	if type(AirFlow) ~= "table" then
+		return createFallbackWindow()
+	end
+
+	local createWindow = AirFlow.CreateWindow or AirFlow.Window or AirFlow.Create
+	if type(createWindow) ~= "function" then
+		return createFallbackWindow()
+	end
+
+	local okWindow, window = pcall(createWindow, spec)
+	if okWindow and type(window) == "table" then
+		return window
+	end
+
+	warn("[AirFlow] Window creation failed. Using fallback UI.")
+	return createFallbackWindow()
+end
+
+local function safeUiTab(window, spec)
+	if type(window) ~= "table" then
+		return createFallbackTab()
+	end
+
+	local tabMethod = window.Tab or window.CreateTab or window.AddTab
+	if type(tabMethod) ~= "function" then
+		return createFallbackTab()
+	end
+
+	local okTab, tab = pcall(tabMethod, window, spec)
+	if okTab and type(tab) == "table" then
+		return tab
+	end
+
+	return createFallbackTab()
+end
+
+local function safeUiNotify(window, spec)
+	if type(window) ~= "table" or type(window.Notify) ~= "function" then
+		return
+	end
+	pcall(window.Notify, window, spec)
+end
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -82,7 +126,7 @@ local PlayerGui = LP:WaitForChild("PlayerGui")
 local Env = getgenv and getgenv() or _G
 
 -- AirFlow UI replacement
-local UI = AirFlow.CreateWindow({
+local UI = safeUiWindow({
     Name = "Airflow",
     Title = "My Script",
     Subtitle = "Converted UI",
@@ -90,31 +134,31 @@ local UI = AirFlow.CreateWindow({
     Size = UDim2.fromOffset(760, 520),
 })
 
-local Main = UI:Tab({
+local Main = safeUiTab(UI, {
     Name = "Main",
     Icon = "house",
     Desc = "Core settings"
 })
 
-local Combat = UI:Tab({
+local Combat = safeUiTab(UI, {
     Name = "Combat",
     Icon = "sword",
     Desc = "Combat tools"
 })
 
-local Farm = UI:Tab({
+local Farm = safeUiTab(UI, {
     Name = "Farm",
     Icon = "tractor",
     Desc = "Automation"
 })
 
-local Teleports = UI:Tab({
+local Teleports = safeUiTab(UI, {
     Name = "Teleports",
     Icon = "map-pin",
     Desc = "Travel shortcuts"
 })
 
-local Misc = UI:Tab({
+local Misc = safeUiTab(UI, {
     Name = "Misc",
     Icon = "sparkles",
     Desc = "Utility"
@@ -237,11 +281,13 @@ Misc:Keybind({
     Name = "Toggle UI",
     Default = Enum.KeyCode.RightControl,
     Callback = function()
-        UI:Toggle()
+        if type(UI) == "table" and type(UI.Toggle) == "function" then
+            pcall(UI.Toggle, UI)
+        end
     end,
 })
 
-UI:Notify({
+safeUiNotify(UI, {
     Title = "Loaded",
     Content = "AirFlow UI ready.",
     Type = "Success",
