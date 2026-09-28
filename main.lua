@@ -1,4 +1,71 @@
-local AirFlow = loadstring(game:HttpGet("https://raw.githubusercontent.com/confessess/AIRFLOW0978109571095710975/main/source.lua"))()
+local function createFallbackTab()
+	local tab = {}
+	local function makeControl(defaultValue)
+		local value = defaultValue
+		return {
+			Set = function(_, newValue)
+				value = newValue
+			end,
+			Get = function()
+				return value
+			end,
+		}
+	end
+	function tab:Toggle(options)
+		return makeControl(options and options.Default == true or false)
+	end
+	function tab:Slider(options)
+		return makeControl(options and options.Default or 0)
+	end
+	function tab:Dropdown(options)
+		return makeControl(options and options.Default or nil)
+	end
+	function tab:Input(options)
+		return makeControl(options and tostring(options.Default or "") or "")
+	end
+	function tab:Keybind(options)
+		return makeControl(options and options.Default or Enum.KeyCode.RightControl)
+	end
+	function tab:Button() return {} end
+	function tab:Section() return {} end
+	function tab:Divider() return {} end
+	function tab:Label() return {} end
+	function tab:Paragraph() return {} end
+	function tab:Progress() return {} end
+	return tab
+end
+
+local function createFallbackWindow()
+	local window = {}
+	function window:Tab(options)
+		return createFallbackTab(options)
+	end
+	function window:Toggle() end
+	function window:Notify() end
+	function window:Dialog() end
+	return window
+end
+
+local AirFlow
+local ok, loadedAirFlow = pcall(function()
+	local loader = loadstring
+	if type(loader) ~= "function" then
+		return nil
+	end
+	return loader(game:HttpGet("https://raw.githubusercontent.com/confessess/AIRFLOW0978109571095710975/main/source.lua"))()
+end)
+if ok and type(loadedAirFlow) == "table" then
+	AirFlow = loadedAirFlow
+else
+	warn("[AirFlow] Failed to load. Falling back to stub UI.")
+	AirFlow = {
+		CreateWindow = createFallbackWindow,
+		Window = createFallbackWindow,
+		Notify = function() end,
+		Confirm = function() end,
+		Dialog = function() end,
+	}
+end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
