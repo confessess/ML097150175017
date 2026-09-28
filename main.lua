@@ -200,16 +200,144 @@ local STATE = {
 	JumpPower = 50,
 	TeleportTarget = "Spawn",
 	SelectedMode = "Normal",
+	InfiniteJump = false,
+	NoClip = false,
 }
 
 debugLog("state initialized")
+
+local function getCharacter()
+	if LP and LP.Character then
+		return LP.Character
+	end
+	return nil
+end
+
+local function getHumanoid()
+	local character = getCharacter()
+	if not character then
+		return nil
+	end
+	return character:FindFirstChildOfClass("Humanoid")
+end
+
+local function applyMovement()
+	local humanoid = getHumanoid()
+	if not humanoid then
+		return
+	end
+
+	if STATE.Enabled then
+		humanoid.WalkSpeed = STATE.WalkSpeed
+		humanoid.JumpPower = STATE.JumpPower
+	else
+		humanoid.WalkSpeed = 16
+		humanoid.JumpPower = 50
+	end
+end
+
+local function applyMode(mode)
+	local presets = {
+		Normal = { WalkSpeed = 100, JumpPower = 50 },
+		Fast = { WalkSpeed = 180, JumpPower = 65 },
+		AFK = { WalkSpeed = 80, JumpPower = 65 },
+		Chill = { WalkSpeed = 55, JumpPower = 45 },
+	}
+
+	local preset = presets[mode] or presets.Normal
+	STATE.SelectedMode = mode
+	STATE.WalkSpeed = preset.WalkSpeed
+	STATE.JumpPower = preset.JumpPower
+	applyMovement()
+	debugLog("preset applied: " .. tostring(mode))
+end
+
+local noClipParts = {}
+local function setNoClip(enabled)
+	STATE.NoClip = enabled == true
+	if not STATE.NoClip then
+		for part in pairs(noClipParts) do
+			if part and part.Parent then
+				part.CanCollide = true
+			end
+		end
+		table.clear(noClipParts)
+		debugLog("NoClip disabled")
+		return
+	end
+
+	local character = getCharacter()
+	if not character then
+		debugLog("NoClip requested but no character exists")
+		return
+	end
+
+	for _, part in ipairs(character:GetDescendants()) do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+			noClipParts[part] = true
+		end
+	end
+
+	debugLog("NoClip enabled")
+end
+
+local infiniteJumpConnection = nil
+local function setInfiniteJump(enabled)
+	STATE.InfiniteJump = enabled == true
+	if infiniteJumpConnection then
+		infiniteJumpConnection:Disconnect()
+		infiniteJumpConnection = nil
+	end
+
+	if not STATE.InfiniteJump then
+		debugLog("InfiniteJump disabled")
+		return
+	end
+
+	infiniteJumpConnection = UserInputService.JumpRequest:Connect(function()
+		if not STATE.Enabled or not STATE.InfiniteJump then
+			return
+		end
+		local humanoid = getHumanoid()
+		if humanoid and humanoid.Health > 0 then
+			humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+		end
+	end)
+
+	debugLog("InfiniteJump enabled")
+end
+
+local movementRenderConnection = nil
+local function ensureMovementLoop()
+	if movementRenderConnection then
+		return
+	end
+
+	movementRenderConnection = RunService.RenderStepped:Connect(function()
+		if not STATE.Enabled then
+			return
+		end
+		applyMovement()
+	end)
+end
 
 Main:Toggle({
 	Name = "Enabled",
 	Default = false,
 	Callback = function(v)
-		STATE.Enabled = v
-		debugLog("Enabled = " .. tostring(v))
+		STATE.Enabled = v == true
+		debugLog("Enabled = " .. tostring(STATE.Enabled))
+		applyMovement()
+		if STATE.Enabled then
+			ensureMovementLoop()
+		else
+			local humanoid = getHumanoid()
+			if humanoid then
+				humanoid.WalkSpeed = 16
+				humanoid.JumpPower = 50
+			end
+		end
 	end,
 })
 
@@ -222,12 +350,50 @@ Main:Slider({
 	Callback = function(v)
 		STATE.WalkSpeed = v
 		debugLog("WalkSpeed = " .. tostring(v))
+		applyMovement()
+	end,
+})
+
+Main:Slider({
+	Name = "Jump Power",
+	Min = 30,
+	Max = 200,
+	Default = 50,
+	Step = 1,
+	Callback = function(v)
+		STATE.JumpPower = v
+		debugLog("JumpPower = " .. tostring(v))
+		applyMovement()
+	end,
+})
+
+Main:Dropdown({
+	Name = "Mode",
+	Options = { "Normal", "Fast", "AFK", "Chill" },
+	Default = "Normal",
+	Callback = function(v)
+		if v then
+			applyMode(v)
+		end
 	end,
 })
 
 Combat:Toggle({
 	Name = "Aimbot",
 	Default = false,
+})
+
+Combat:Toggle({
+	Name = "Silent Aim",
+	Default = false,
+})
+
+Combat:Slider({
+	Name = "FOV",
+	Min = 20,
+	Max = 200,
+	Default = 80,
+	Step = 1,
 })
 
 Farm:Toggle({
@@ -239,14 +405,50 @@ Farm:Toggle({
 	end,
 })
 
+Farm:Slider({
+	Name = "Farm Delay",
+	Min = 0.1,
+	Max = 5,
+	Default = 1,
+	Step = 0.1,
+	Suffix = "s",
+})
+
+Farm:Dropdown({
+	Name = "Farm Target",
+	Options = { "Coins", "XP", "Kills", "Pets" },
+	Default = "Coins",
+})
+
 Teleports:Dropdown({
 	Name = "Teleport To",
-	Options = { "Spawn", "Lobby", "Arena", "Shop", "Boss" },
+	Options = { "Spawn", "Lobby", "Arena", "Shop", "Boss", "Premium Area" },
 	Default = "Spawn",
 	Callback = function(v)
 		STATE.TeleportTarget = v
 		debugLog("TeleportTarget = " .. tostring(v))
 	end,
+})
+
+Misc:Toggle({
+	Name = "Infinite Jump",
+	Default = false,
+	Callback = function(v)
+		setInfiniteJump(v)
+	end,
+})
+
+Misc:Toggle({
+	Name = "No Clip",
+	Default = false,
+	Callback = function(v)
+		setNoClip(v)
+	end,
+})
+
+Misc:Input({
+	Name = "Custom command",
+	Placeholder = "type here",
 })
 
 Misc:Keybind({
@@ -261,9 +463,10 @@ Misc:Keybind({
 
 safeUiNotify(UI, {
 	Title = "Loaded",
-	Content = "Stage 1 boot successful.",
+	Content = "Stage 2 movement features active.",
 	Type = "Success",
 	Duration = 2,
 })
 
-debugLog("stage 1 complete")
+applyMode("Normal")
+debugLog("stage 2 ready")
